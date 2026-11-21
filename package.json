@@ -1,0 +1,73 @@
+{
+  "name": "denspeak-studio",
+  "productName": "Denspeak Studio",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Denspeak Studio — on-device voice studio, rebuilt as editable source.",
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.965media.denspeakstudio",
+    "productName": "Denspeak Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/icon.ico",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "author": {
+    "name": "965 Media"
+  },
+  "scripts": {
+    "postinstall": "node scripts/patch-vits.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "dist:win": "npm run build && node scripts/dist-win.mjs",
+    "test": "vitest run",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "legacy": "electron legacy-build --user-data-dir=./.legacy-profile",
+    "fetch:model": "node scripts/fetch-model.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "gen:voices": "node scripts/gen-voices.mjs",
+    "gen:catalog": "node scripts/build-voices.mjs"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
+    "@diffusionstudio/vits-web": "^1.0.3",
+    "@huggingface/transformers": "^4.3.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "voxshot": "^0.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
+    "jsdom": "^31.0.1",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
