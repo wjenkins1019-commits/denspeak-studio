@@ -9,7 +9,6 @@ const KEYS = {
   humanizeStrength: 'chatterbox.humanizeStrength',
   expressiveness: 'chatterbox.expressiveness',
   eq: 'chatterbox.eqPreset',
-  eqEditedBands: 'chatterbox.eqEditedBands',
   eqDraft: 'chatterbox.eqDraft',
   semitones: 'chatterbox.semitones',
   formant: 'chatterbox.formant',

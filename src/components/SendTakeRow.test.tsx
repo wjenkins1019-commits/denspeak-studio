@@ -1,13 +1,24 @@
 // @vitest-environment jsdom
-// The strip never offers the section the take came from: sending a take to
-// where it already is only reloads it behind a notice that announces an
-// arrival from somewhere else.
+// Every section's strip is this one component with a different `from`, so the
+// table runs it once per section: the section you are in must never be offered
+// as a destination, and the take must leave stamped with that section, so the
+// notice's "Back to …" can only name where the take really came from.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SendTakeRow } from './SendTakeRow';
-import { clearHandoff, subscribeHandoff, takeHandoff, type HandoffItem } from '../lib/handoff';
+import {
+  HANDOFF_TARGETS,
+  clearHandoff,
+  sectionLabel,
+  subscribeHandoff,
+  takeHandoff,
+  type HandoffItem,
+  type HandoffSource,
+} from '../lib/handoff';
 
-const take = { name: 'A take', blob: new Blob(['audio']), from: 'studio' as const };
+const take = { name: 'A take', blob: new Blob(['audio']) };
+
+const SECTIONS: HandoffSource[] = ['studio', 'convert', 'transcribe', 'process', 'song', 'library'];
 
 afterEach(() => {
   cleanup();
@@ -16,36 +27,31 @@ afterEach(() => {
 });
 
 describe('SendTakeRow', () => {
-  it('leaves out the section the take came from', () => {
-    window.history.replaceState(null, '', '#/process');
+  it.each(SECTIONS)('leaves its own section (%s) out of the destinations', (from) => {
+    window.history.replaceState(null, '', `#/${from}`);
 
-    render(<SendTakeRow {...take} from="process" />);
+    render(<SendTakeRow {...take} from={from} />);
 
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Convert',
-      'Transcribe',
-      'Beat',
-    ]);
+    const offered = screen.getAllByRole('button').map((button) => button.textContent);
+    expect(offered).toEqual(
+      HANDOFF_TARGETS.filter((entry) => entry.target !== from).map((entry) => entry.label),
+    );
+    // Library receives nothing, so there its own name is simply absent too.
+    expect(offered).not.toContain(sectionLabel(from));
   });
 
-  it('still offers every section to a take from Studio, which receives none', () => {
-    render(<SendTakeRow {...take} />);
+  it.each(SECTIONS)('stamps the take with %s as its source', (from) => {
+    const target = HANDOFF_TARGETS.find((entry) => entry.target !== from);
+    if (!target) throw new Error('every section has somewhere to send a take');
 
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Convert',
-      'Transcribe',
-      'Shape',
-      'Beat',
-    ]);
-  });
-
-  it('hands the take, its length, its captions and its source to the section already open', () => {
-    window.history.replaceState(null, '', '#/process');
+    window.history.replaceState(null, '', `#/${from}`);
     const seen: HandoffItem[] = [];
-    const stop = subscribeHandoff('process', (item) => seen.push(item));
+    const stop = subscribeHandoff(target.target, (item) => seen.push(item));
 
-    render(<SendTakeRow {...take} duration={12.5} captions={{ srt: 'srt', vtt: 'vtt' }} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Shape' }));
+    render(
+      <SendTakeRow {...take} duration={12.5} captions={{ srt: 'srt', vtt: 'vtt' }} from={from} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: target.label }));
     stop();
 
     expect(seen).toHaveLength(1);
@@ -53,9 +59,21 @@ describe('SendTakeRow', () => {
       name: 'A take',
       duration: 12.5,
       captions: { srt: 'srt', vtt: 'vtt' },
-      from: 'studio',
+      from,
     });
-    expect(takeHandoff('process')).toBeNull();
+    expect(takeHandoff(target.target)).toBeNull();
+  });
+
+  it('offers every destination to a take from Library, which receives none', () => {
+    render(<SendTakeRow {...take} from="library" />);
+
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Studio',
+      'Convert',
+      'Transcribe',
+      'Shape',
+      'Beat',
+    ]);
   });
 
   it('queues for a section that is not open, and opens it without a history entry', () => {
@@ -64,7 +82,7 @@ describe('SendTakeRow', () => {
     const heard = vi.fn();
     window.addEventListener('hashchange', heard);
 
-    render(<SendTakeRow {...take} />);
+    render(<SendTakeRow {...take} from="library" />);
     fireEvent.click(screen.getByRole('button', { name: 'Beat' }));
     window.removeEventListener('hashchange', heard);
 

@@ -17,7 +17,7 @@ import {
   setAudiobook,
   useRenderQueue,
 } from '../lib/renderQueue';
-import { sameBands, styleById, type EqBand } from '../lib/eq';
+import { styleById } from '../lib/eq';
 import { captureMic, type MicCapture } from '../lib/mic';
 import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { RecordDot } from '../components/RecordDot';
@@ -56,6 +56,9 @@ import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
+import { HandoffNotice } from '../components/HandoffNotice';
+import { useHandoffTake } from '../lib/useHandoffTake';
+import type { HandoffItem } from '../lib/handoff';
 
 interface StudioProps {
   voiceId: string;
@@ -89,10 +92,10 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
   const [strength, setStrength] = useSetting<number>(SETTING_KEYS.humanizeStrength, DEFAULT_STRENGTH);
   const [expressiveness, setExpressiveness] = useSetting<number>(SETTING_KEYS.expressiveness, 0.5);
   const [eqId, setEqId] = useSetting<string>(SETTING_KEYS.eq, 'flat');
-  // Bands dragged on the graph, kept apart from the preset they started from so
-  // choosing a preset is still a clean reset. Shared with Convert: the two
-  // views have always shown the same preset, so they show the same edit too.
-  const [editedBands, setEditedBands] = useSetting<EqBand[] | null>(SETTING_KEYS.eqEditedBands, null);
+  // A take handed in by another section (Shape, Convert, …), kept beside the
+  // render queue's latest take so a render can go out, be shaped, and come
+  // back ready to go out again.
+  const [received, setReceived] = useState<HandoffItem | null>(null);
   const [mastering, setMastering] = useSetting<string | null>(SETTING_KEYS.mastering, null);
   const [semitones, setSemitones] = useSetting<number>(SETTING_KEYS.semitones, 0);
   const [formant, setFormant] = useSetting<number>(SETTING_KEYS.formant, 0);
@@ -111,6 +114,14 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
   const [cloned, setCloned] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+
+  // A take sent here from another section arrives as the Studio's own take.
+  const handoff = useHandoffTake<HandoffItem>(
+    'studio',
+    received,
+    (item) => setReceived(item),
+    (before) => setReceived(before),
+  );
   // Per-project lock: each piece keeps its own script and sound, auto-saved
   // on switch so the knobs always match the piece on screen.
   const [projectList, setProjectList] = useState<StudioProject[]>(() => {
@@ -179,7 +190,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
   const voice = VOICES_BY_ID.get(baseVoiceId);
   // What the graph shows and what the render uses, edit or preset.
   const eqStyle = styleById(eqId);
-  const eqBands = editedBands ?? eqStyle.bands;
+  const eqBands = eqStyle.bands;
 
   useEffect(() => {
     void listClonedVoices().then(setCloned);
@@ -194,7 +205,6 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
         setFormant(preset.formant);
         setBrightness(preset.brightness);
         setEqId(preset.eqPresetId);
-        setEditedBands(null);
         onSpeedChange(preset.speed);
         setHumanize(preset.humanize);
         setStrength(preset.strength);
@@ -204,7 +214,6 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
       const remembered = voiceEqFor(next);
       if (remembered) {
         setEqId(remembered);
-        setEditedBands(null);
       }
     }
     onVoiceChange(next);
@@ -250,14 +259,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
   /** Choosing a style also remembers it for the voice it was chosen on. */
   function selectEq(styleId: string) {
     setEqId(styleId);
-    // A preset is a starting point: the hand-tuned bands go with the old one.
-    setEditedBands(null);
     if (!isSavedVoice(voiceId)) rememberVoiceEq(voiceId, styleId);
-  }
-
-  /** Dragging a node on the graph. Matching the preset again clears the edit. */
-  function editBands(next: EqBand[]) {
-    setEditedBands(sameBands(next, styleById(eqId).bands) ? null : next);
   }
 
   async function handleSaveVoice() {
@@ -349,7 +351,9 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
       formant,
       brightness,
       eqPresetId: eqId,
-      eqBands: editedBands,
+      // Bands are shaped and saved in the Shape view now, so a project only
+      // names the preset it was rendered through.
+      eqBands: null,
       mastering,
     };
   }
@@ -366,7 +370,6 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
     setFormant(next.formant);
     setBrightness(next.brightness);
     setEqId(next.eqPresetId);
-    setEditedBands(next.eqBands);
     setMastering(next.mastering ?? null);
     setActiveProjectId(next.id);
   }
@@ -440,7 +443,6 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
     setHumanize(preset.humanize);
     setStrength(preset.strength);
     setEqId(preset.eqPresetId);
-    setEditedBands(null);
     setMastering(preset.mastering);
     setNotice(`Preset applied: ${preset.name} — ${preset.blurb}`);
   }
@@ -979,6 +981,32 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             />
           )}
 
+          {handoff.arrival && (
+            <HandoffNotice
+              item={handoff.arrival.item}
+              replaced={handoff.arrival.before !== null}
+              onKeep={handoff.keep}
+            />
+          )}
+
+          {received && (
+            <div className="stack">
+              <small className="muted">Sent to the Studio: {received.name}</small>
+              <Player
+                blob={received.blob}
+                name={received.name}
+                captions={received.captions}
+              />
+              <SendTakeRow
+                name={received.name}
+                blob={received.blob}
+                duration={received.duration}
+                captions={received.captions}
+                from="studio"
+              />
+            </div>
+          )}
+
           <div className="hint">
             {isClone ? (
               <>
@@ -1016,13 +1044,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
           </p>
         </div>
 
-        <EqPanel
-          presetId={eqId}
-          bands={eqBands}
-          edited={editedBands !== null}
-          onPresetChange={selectEq}
-          onChangeBands={editBands}
-        />
+        <EqPanel presetId={eqId} bands={eqBands} onPresetChange={selectEq} />
         <label className="field">
           <span>Mastering · lands the render inside the delivery bar</span>
           <select

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// Queued takes are held per section, not in one slot for the whole app: a send
+// to a second section before the first is opened must not drop the first take.
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   clearHandoff,
@@ -7,6 +9,7 @@ import {
   sendHandoff,
   subscribeHandoff,
   takeHandoff,
+  HANDOFF_TARGETS,
 } from './handoff';
 
 const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
@@ -30,6 +33,37 @@ describe('handoff', () => {
 
   it('returns nothing when nothing is queued', () => {
     expect(takeHandoff('song')).toBeNull();
+  });
+
+  it('holds a take for each section, so a second send cannot overwrite the first', () => {
+    sendHandoff('convert', item);
+    sendHandoff('transcribe', { ...item, name: 'Another take' });
+
+    expect(takeHandoff('transcribe')).toMatchObject({ name: 'Another take' });
+    // The take sent first was still waiting for its own section.
+    expect(takeHandoff('convert')).toEqual(item);
+  });
+
+  it('holds more than one take for the same section, oldest first', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+
+    expect(takeHandoff('convert')).toEqual(item);
+    expect(takeHandoff('convert')).toMatchObject({ name: 'Second take' });
+    expect(takeHandoff('convert')).toBeNull();
+  });
+
+  it('hands a section one queued take per visit, leaving the rest waiting', () => {
+    sendHandoff('song', item);
+    sendHandoff('song', { ...item, name: 'Second take' });
+    const seen: string[] = [];
+
+    const stop = subscribeHandoff('song', (handed) => seen.push(handed.name));
+    stop();
+
+    expect(seen).toEqual(['A take']);
+    // Not discarded: the next visit still has it rather than an empty section.
+    expect(takeHandoff('song')).toMatchObject({ name: 'Second take' });
   });
 
   it('hands a take straight to the section that is already open', () => {
@@ -103,12 +137,18 @@ describe('returnTake', () => {
     expect(takeHandoff('convert')).toEqual({ ...item, returned: true });
   });
 
+  it('carries the take back into the Studio, which can receive one', () => {
+    returnTake('studio', item);
+
+    expect(window.location.hash).toBe('#/studio');
+    expect(takeHandoff('studio')).toEqual({ ...item, returned: true });
+  });
+
   it('only opens a section that keeps its own work', () => {
     returnTake('library', item);
 
     expect(window.location.hash).toBe('#/library');
-    for (const target of ['convert', 'transcribe', 'process', 'song'] as const) {
-      expect(takeHandoff(target)).toBeNull();
-    }
+    // Library holds its takes in the database, so nothing needs carrying.
+    for (const { target } of HANDOFF_TARGETS) expect(takeHandoff(target)).toBeNull();
   });
 });

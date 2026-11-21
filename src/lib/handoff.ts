@@ -1,11 +1,11 @@
 // Passing a finished take to another section without exporting a WAV and
-// uploading it again. The pending item is module state, which outlives the view
-// that created it: navigating swaps the view, not the page.
+// uploading it again. Queued takes are module state, which outlives the view
+// that created them: navigating swaps the view, not the page.
 
-export type HandoffTarget = 'convert' | 'transcribe' | 'process' | 'song';
+export type HandoffTarget = 'studio' | 'convert' | 'transcribe' | 'process' | 'song';
 
-/** Any section that can send a take, including the two that only ever send. */
-export type HandoffSource = HandoffTarget | 'studio' | 'library';
+/** Any section that can send a take, including Library, which only ever sends. */
+export type HandoffSource = HandoffTarget | 'library';
 
 /** What each section is called in the UI, e.g. 'Shape' for `process`. */
 const SECTION_LABELS: Record<HandoffSource, string> = {
@@ -65,6 +65,7 @@ export interface HandoffItem {
 
 /** Sections a take can be sent to, with the label their button shows. */
 export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = [
+  { target: 'studio', label: 'Studio' },
   { target: 'convert', label: 'Convert' },
   { target: 'transcribe', label: 'Transcribe' },
   { target: 'process', label: 'Shape' },
@@ -73,7 +74,13 @@ export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = 
 
 type Listener = (item: HandoffItem) => void;
 
-let pending: { target: HandoffTarget; item: HandoffItem } | null = null;
+/**
+ * Takes waiting for each section, oldest first. There is a queue per section
+ * rather than one slot for the whole app: a send to a second section used to
+ * overwrite the take still waiting for the first, dropping its audio with no
+ * undo. Nothing is discarded now — a take nobody has taken yet stays queued.
+ */
+const pending = new Map<HandoffTarget, HandoffItem[]>();
 
 /**
  * The sections that are open right now. A take sent to one of them is handed
@@ -91,13 +98,16 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
     return;
   }
 
-  pending = { target, item };
+  const queue = pending.get(target);
+  if (queue) queue.push(item);
+  else pending.set(target, [item]);
 }
 
 /**
- * Listen for takes sent to this section: one queued before it opened is handed
- * over at once, and one sent while it is open arrives without a remount.
- * Reading the queued item clears it, so a later visit starts empty.
+ * Listen for takes sent to this section: the oldest one queued before it opened
+ * is handed over at once, and one sent while it is open arrives without a
+ * remount. Anything else still queued stays queued rather than being thrown
+ * away, and is taken by a later visit.
  */
 export function subscribeHandoff(target: HandoffTarget, listener: Listener): () => void {
   const listeners = open.get(target) ?? new Set<Listener>();
@@ -136,16 +146,16 @@ export function sendTake(target: HandoffTarget, item: HandoffItem): void {
   openSection(target);
 }
 
-/** Whether a section can be sent a take; Studio and Library only ever send one. */
+/** Whether a section can be sent a take; Library only ever sends one. */
 function isTarget(section: HandoffSource): section is HandoffTarget {
-  return section !== 'studio' && section !== 'library';
+  return section !== 'library';
 }
 
 /**
  * Hand `item` back to the section it came from and open it. The hand-off
  * unmounted that section, so opening its route alone would show it empty; the
- * take travels with it and is that section's source again. Studio and Library
- * keep their own work on disk, so for them opening the section is enough.
+ * take travels with it and is that section's source again. Library keeps its
+ * takes in the database, so for it opening the section is enough.
  */
 export function returnTake(to: HandoffSource, item: HandoffItem): void {
   if (isTarget(to)) sendHandoff(to, { ...item, returned: true });
@@ -153,17 +163,19 @@ export function returnTake(to: HandoffSource, item: HandoffItem): void {
 }
 
 /**
- * The item queued for this section, if any. Reading it clears it, so a later
- * visit starts empty instead of re-loading audio the user already moved on from.
+ * The oldest item queued for this section, if any. Reading it clears it, so the
+ * next visit starts with whatever was sent after it, not the take again.
  */
 export function takeHandoff(target: HandoffTarget): HandoffItem | null {
-  if (!pending || pending.target !== target) return null;
-  const { item } = pending;
-  pending = null;
+  const queue = pending.get(target);
+  const item = queue?.shift();
+  if (!queue || !item) return null;
+
+  if (queue.length === 0) pending.delete(target);
   return item;
 }
 
 /** Drop anything queued. Used by tests between cases. */
 export function clearHandoff(): void {
-  pending = null;
+  pending.clear();
 }

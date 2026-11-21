@@ -32,15 +32,25 @@ describe('HandoffNotice', () => {
     expect(takeHandoff('convert')).toEqual({ ...arrived, returned: true });
   });
 
-  it('names the sender by its UI label, and queues nothing for a section that keeps its own work', () => {
-    window.history.replaceState(null, '', '#/song');
+  it('carries the take back into the Studio, which takes one', () => {
+    window.history.replaceState(null, '', '#/process');
 
     render(<HandoffNotice item={{ ...arrived, from: 'studio' }} replaced={false} onKeep={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Back to Studio' }));
 
     expect(window.location.hash).toBe('#/studio');
-    // Studio keeps its projects on disk. A take queued at a section that only
-    // ever sends would sit there and land unasked on some later visit.
+    expect(takeHandoff('studio')).toEqual({ ...arrived, from: 'studio', returned: true });
+  });
+
+  it('only opens a section that keeps its own work', () => {
+    window.history.replaceState(null, '', '#/song');
+
+    render(<HandoffNotice item={{ ...arrived, from: 'library' }} replaced={false} onKeep={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Library' }));
+
+    expect(window.location.hash).toBe('#/library');
+    // Library holds its takes in the database. A take queued at a section that
+    // only ever sends would sit there and land unasked on some later visit.
     for (const { target } of HANDOFF_TARGETS) expect(takeHandoff(target)).toBeNull();
   });
 

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { decodeToMono, transformVoice, wavBlob, type VoiceShape } from '../lib/audio';
-import { applyEq, sameBands, styleById, type EqBand } from '../lib/eq';
+import { applyEq, styleById } from '../lib/eq';
 import { saveTake, type Take } from '../lib/library';
 import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
@@ -54,10 +54,6 @@ export default function Convert() {
   const [presetId, setPresetId] = useState('original');
   // Shares the Studio's choice, so a converted take matches its tone by default.
   const [eqId, setEqId] = useSetting<string>(SETTING_KEYS.eq, 'flat');
-  // Same working bands as the Studio: dragging a node here edits the preset
-  // shown on both graphs, and both applies it that way.
-  const [editedBands, setEditedBands] = useSetting<EqBand[] | null>(SETTING_KEYS.eqEditedBands, null);
-  const [levelOut, setLevelOut] = useState(() => styleById('flat').level);
   const [take, setTake] = useState<Take | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +69,7 @@ export default function Convert() {
   );
 
   const style = useMemo(() => styleById(eqId), [eqId]);
-  const bands = editedBands ?? style.bands;
+  const bands = style.bands;
 
   function applyPreset(preset: Preset) {
     setPresetId(preset.id);
@@ -84,15 +80,7 @@ export default function Convert() {
   }
 
   function chooseStyle(id: string) {
-    const next = styleById(id);
     setEqId(id);
-    setEditedBands(null);
-    setLevelOut(next.level);
-    setTake(null);
-  }
-
-  function editBands(next: EqBand[]) {
-    setEditedBands(sameBands(next, style.bands) ? null : next);
     setTake(null);
   }
 
@@ -157,8 +145,8 @@ export default function Convert() {
       // Same finishing as a Studio render: the style's bands, then optional
       // levelling. Both keep the length, so duration stays that of the shift.
       const styled =
-        bands.length > 0 || levelOut
-          ? applyEq(shifted, decoded.sampleRate, bands, { compress: levelOut })
+        bands.length > 0 || style.level
+          ? applyEq(shifted, decoded.sampleRate, bands, { compress: style.level })
           : shifted;
 
       const blob = wavBlob(styled, decoded.sampleRate);
@@ -290,30 +278,13 @@ export default function Convert() {
         <div>
           <h2>EQ preset</h2>
           <p>
-            The same presets as the Studio, applied to the shifted recording before it is saved. Kept
-            apart from the voice shape above, so the two can be chosen independently.
+            Presets are made, saved and shaped in the Shape section; here one is applied to the
+            shifted recording before it is saved, levelling included. Kept apart from the voice shape
+            above, so the two can be chosen independently.
           </p>
         </div>
 
-        <EqPanel
-          presetId={eqId}
-          bands={bands}
-          edited={editedBands !== null}
-          onPresetChange={chooseStyle}
-          onChangeBands={editBands}
-        />
-
-        <label className="row" style={{ gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={levelOut}
-            onChange={(event) => {
-              setLevelOut(event.target.checked);
-              setTake(null);
-            }}
-          />
-          <span>Level out (compress + peak to −1 dBFS)</span>
-        </label>
+        <EqPanel presetId={eqId} bands={bands} onPresetChange={chooseStyle} />
 
         <button className="btn primary" disabled={!source || busy} onClick={() => void handleConvert()}>
           {busy ? 'Converting…' : 'Convert and save'}
