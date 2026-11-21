@@ -63,3 +63,21 @@ export function HandoffNotice({
     </div>
   );
 }
+
+/**
+ * What is left of a queue once the arrival notice is dismissed. Dismissing a
+ * take says "this one is welcome", not "forget the rest", so the count and the
+ * step to the next take stay on screen while anything is still waiting.
+ */
+export function WaitingTakes({ waiting, onNext }: { waiting: number; onNext: () => void }) {
+  if (waiting <= 0) return null;
+
+  return (
+    <div className="row between">
+      <small className="muted">{waiting} more waiting</small>
+      <button className="btn ghost small" onClick={onNext}>
+        Next take
+      </button>
+    </div>
+  );
+}

@@ -7,7 +7,7 @@ import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffNotice } from '../components/HandoffNotice';
+import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import { useHandoffTake } from '../lib/useHandoffTake';
 import { EqPanel } from '../components/EqPanel';
 
@@ -197,7 +197,7 @@ export default function Convert() {
           </div>
           <LiveLevelMeter stream={meterStream} />
 
-          {handoff.arrival && (
+          {handoff.arrival ? (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}
@@ -205,6 +205,8 @@ export default function Convert() {
               onNext={handoff.next}
               onKeep={handoff.keep}
             />
+          ) : (
+            <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
           )}
 
           {source ? (

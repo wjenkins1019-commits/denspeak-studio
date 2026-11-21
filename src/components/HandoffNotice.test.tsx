@@ -6,7 +6,7 @@
 // sender can never be offered a way "back" to itself.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HandoffNotice } from './HandoffNotice';
+import { HandoffNotice, WaitingTakes } from './HandoffNotice';
 import { clearHandoff, HANDOFF_TARGETS, takeHandoff } from '../lib/handoff';
 
 const arrived = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
@@ -84,6 +84,19 @@ describe('HandoffNotice', () => {
     expect(screen.getByText(/2 more waiting/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the rest of the queue reachable once the notice is dismissed', () => {
+    const next = vi.fn();
+    const { rerender } = render(<WaitingTakes waiting={2} onNext={next} />);
+
+    expect(screen.getByText('2 more waiting')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    expect(next).toHaveBeenCalledTimes(1);
+
+    // Nothing left: the row goes away rather than sitting there counting zero.
+    rerender(<WaitingTakes waiting={0} onNext={next} />);
+    expect(screen.queryByText(/more waiting/)).toBeNull();
   });
 
   it('keeps the arrival wording for a forward hand-off', () => {

@@ -87,6 +87,27 @@ describe('Shape hand-off', () => {
     expect(screen.getAllByText('Second sample loaded. Shape it, then apply.')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Next take' })).toBeNull();
   });
+
+  it('keeps the queue reachable after the arrival notice is dismissed', () => {
+    sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
+    sendHandoff('process', { name: 'Second sample', blob: new Blob(['b']), duration: 4 });
+    sendHandoff('process', { name: 'Third sample', blob: new Blob(['c']), duration: 6 });
+
+    render(<Process />);
+
+    expect(screen.getByText(/2 more waiting/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+
+    // Dismissed, but the queue is not gone: the count and the step stay.
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+    expect(screen.getByText(/2 more waiting/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+
+    expect(screen.getAllByText('Second sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+  });
 });
 
 describe('Shape preset undo', () => {

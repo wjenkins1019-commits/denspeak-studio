@@ -4,7 +4,7 @@ import { exportFileName, saveBlob } from '../lib/export';
 import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { Player } from '../components/Player';
-import { HandoffNotice } from '../components/HandoffNotice';
+import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import type { HandoffItem } from '../lib/handoff';
 import { useHandoffTake } from '../lib/useHandoffTake';
 
@@ -138,7 +138,7 @@ export default function Transcribe() {
             />
           </div>
 
-          {handoff.arrival && (
+          {handoff.arrival ? (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}
@@ -146,6 +146,8 @@ export default function Transcribe() {
               onNext={handoff.next}
               onKeep={handoff.keep}
             />
+          ) : (
+            <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
           )}
 
           {source ? (
