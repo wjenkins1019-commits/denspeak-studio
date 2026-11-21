@@ -40,7 +40,9 @@ export function HandoffNotice({
   ].filter(Boolean);
 
   return (
-    <div className="row between">
+    // A status message: the arrival is news, and nothing else on screen may
+    // have moved focus to it.
+    <div className="row between" role="status" aria-atomic="true">
       <small className="muted">
         {returning ? 'Your take is back:' : 'Arrived from another section:'} {item.name}
         {notes.length > 0 ? ` — ${notes.join(' · ')}` : ''}

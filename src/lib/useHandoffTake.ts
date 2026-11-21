@@ -7,6 +7,27 @@ import {
   type HandoffTarget,
 } from './handoff';
 
+/**
+ * Focus the section's heading when a hand-off lands in it, so the view that
+ * swapped in under the user announces itself instead of leaving them with
+ * nothing focused.
+ *
+ * Focus is only taken when nothing already has it: a take that arrives while
+ * the section is open, or one stepped to from the notice, must not pull the
+ * caret out of what the user is doing.
+ */
+export function useHandoffFocus(arrival: unknown) {
+  const heading = useRef<HTMLHeadingElement | null>(null);
+
+  useEffect(() => {
+    if (!arrival) return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    heading.current?.focus();
+  }, [arrival]);
+
+  return heading;
+}
+
 export interface HandoffArrival<S> {
   item: HandoffItem;
   /** What the section held when the item landed; null when it held nothing. */

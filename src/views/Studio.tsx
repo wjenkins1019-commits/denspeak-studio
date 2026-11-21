@@ -57,7 +57,7 @@ import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
 import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
-import { useHandoffTake } from '../lib/useHandoffTake';
+import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 import type { HandoffItem } from '../lib/handoff';
 
 interface StudioProps {
@@ -122,6 +122,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
     (item) => setReceived(item),
     (before) => setReceived(before),
   );
+  const heading = useHandoffFocus(handoff.arrival);
   // Per-project lock: each piece keeps its own script and sound, auto-saved
   // on switch so the knobs always match the piece on screen.
   const [projectList, setProjectList] = useState<StudioProject[]>(() => {
@@ -570,7 +571,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
       <header className="page-head">
         <div>
           <span className="eyebrow">Studio</span>
-          <h1>Narrate a script</h1>
+          <h1 ref={heading} tabIndex={-1}>Narrate a script</h1>
           <p>
             Type or paste text, pick a voice, and render it locally. The first render with a voice
             downloads its model; after that it works offline.

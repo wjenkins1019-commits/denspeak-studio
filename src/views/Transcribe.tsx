@@ -6,7 +6,7 @@ import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { Player } from '../components/Player';
 import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import type { HandoffItem } from '../lib/handoff';
-import { useHandoffTake } from '../lib/useHandoffTake';
+import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 interface Source {
   blob: Blob;
@@ -39,6 +39,7 @@ export default function Transcribe() {
       setText(before.text);
     },
   );
+  const heading = useHandoffFocus(handoff.arrival);
 
   // A handed take carries its length, so it is not decoded again just to fill in
   // the duration the way a dropped file has to be.
@@ -102,7 +103,7 @@ export default function Transcribe() {
       <header className="page-head">
         <div>
           <span className="eyebrow">Transcribe</span>
-          <h1>Read a recording</h1>
+          <h1 ref={heading} tabIndex={-1}>Read a recording</h1>
           <p>
             Drop in a voice sample and Whisper writes down what it says. The model downloads once,
             then runs on this machine — the recording never leaves it.

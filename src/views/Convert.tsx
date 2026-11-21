@@ -8,7 +8,7 @@ import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { SendTakeRow } from '../components/SendTakeRow';
 import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
-import { useHandoffTake } from '../lib/useHandoffTake';
+import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 import { EqPanel } from '../components/EqPanel';
 
 interface Preset {
@@ -67,6 +67,7 @@ export default function Convert() {
     (item) => setSource({ blob: item.blob, name: item.name, captions: item.captions }),
     (before) => setSource(before),
   );
+  const heading = useHandoffFocus(handoff.arrival);
 
   const style = useMemo(() => styleById(eqId), [eqId]);
   const bands = style.bands;
@@ -177,7 +178,7 @@ export default function Convert() {
       <header className="page-head">
         <div>
           <span className="eyebrow">Convert</span>
-          <h1>Change a recording</h1>
+          <h1 ref={heading} tabIndex={-1}>Change a recording</h1>
           <p>
             Record or drop in audio and shift its pitch, formants and brightness. Everything happens
             on this machine — the file never leaves it.

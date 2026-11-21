@@ -11,7 +11,7 @@ import { DEFAULT_VOICE, SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
 import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
-import { useHandoffTake } from '../lib/useHandoffTake';
+import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 const LYRICS_SAMPLE = `I write it once, the beat decides the pace
 Every line I drop lands exactly in its place
@@ -60,6 +60,7 @@ export default function Song() {
       setOffset(before.offset);
     },
   );
+  const heading = useHandoffFocus(handoff.arrival);
 
   const lines = useMemo(
     () =>
@@ -190,7 +191,7 @@ export default function Song() {
       <header className="page-head">
         <div>
           <span className="eyebrow">Song</span>
-          <h1>Rap over your beat</h1>
+          <h1 ref={heading} tabIndex={-1}>Rap over your beat</h1>
           <p>
             Upload a track, write one line per bar, and each line is time-fitted to the beat grid
             and mixed under it. Delivery is spoken-word, not melodic — these voices are speech

@@ -23,7 +23,7 @@ import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
 import { SendTakeRow } from '../components/SendTakeRow';
 import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
-import { useHandoffTake } from '../lib/useHandoffTake';
+import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
 
@@ -101,6 +101,7 @@ export default function Process() {
     (item) => loadSource(item.blob, item.name, item.captions),
     (before) => loadSource(before.blob, before.label, before.captions),
   );
+  const heading = useHandoffFocus(handoff.arrival);
 
   const style = useMemo(() => styleById(styleId), [styleId]);
 
@@ -340,7 +341,7 @@ export default function Process() {
       <header className="page-head">
         <div>
           <span className="eyebrow">Shape</span>
-          <h1>EQ and level a sample</h1>
+          <h1 ref={heading} tabIndex={-1}>EQ and level a sample</h1>
           <p>
             Pull a sample from the voice bank or load your own recording, shape it with a parametric
             equaliser, level it, and save the result. Nothing leaves the machine.

@@ -71,6 +71,33 @@ describe('Shape hand-off', () => {
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
 
+  it('announces the arrival as a status and puts focus on the section heading', () => {
+    sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
+
+    render(<Process />);
+
+    // Announced by the live region, not just drawn: the record dot is the only
+    // other status in the view.
+    expect(
+      screen.getByText(/Arrived from another section: First sample/).closest('[role="status"]'),
+    ).not.toBeNull();
+    // The view swapped in under the user, so focus goes with it.
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }));
+  });
+
+  it('leaves focus alone when a take arrives while the user is working', () => {
+    render(<Process />);
+    const field = screen.getByPlaceholderText('Name this preset');
+    field.focus();
+
+    act(() => sendHandoff('process', { name: 'Late sample', blob: new Blob(['b']), duration: 3 }));
+
+    expect(
+      screen.getByText(/Arrived from another section: Late sample/).closest('[role="status"]'),
+    ).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+  });
+
   // Not under StrictMode: a double mount would drain two takes and skip the
   // queue this is about.
   it('reports the take queued behind the first and takes it in place', () => {
