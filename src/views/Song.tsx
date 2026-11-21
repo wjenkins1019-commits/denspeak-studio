@@ -252,6 +252,7 @@ export default function Song() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
+              here="song"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />
@@ -346,6 +347,7 @@ export default function Song() {
                 blob={mix.blob}
                 duration={mix.take.duration}
                 captions={mix.take.captions}
+                from="song"
               />
               <div className="take-list">
                 {mix.result.lines.map((line, index) => (

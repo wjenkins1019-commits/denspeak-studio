@@ -236,6 +236,7 @@ export default function Library() {
                 blob={take.blob}
                 duration={take.duration}
                 captions={take.captions}
+                from="library"
               />
               {openId === take.id && (
                   <Player

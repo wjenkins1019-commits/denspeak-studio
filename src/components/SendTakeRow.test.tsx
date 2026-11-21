@@ -3,21 +3,21 @@
 // the take to an open section rather than queueing it for a remount that the
 // unchanged hash would never trigger.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SendTakeRow } from './SendTakeRow';
 import { clearHandoff, subscribeHandoff, takeHandoff, type HandoffItem } from '../lib/handoff';
 
-const take = { name: 'A take', blob: new Blob(['audio']) };
+const take = { name: 'A take', blob: new Blob(['audio']), from: 'studio' as const };
 
 afterEach(() => {
   cleanup();
   clearHandoff();
-  window.location.hash = '';
+  window.history.replaceState(null, '', window.location.pathname);
 });
 
 describe('SendTakeRow', () => {
   it('offers every section, including the one already on screen', () => {
-    window.location.hash = '#/process';
+    window.history.replaceState(null, '', '#/process');
 
     render(<SendTakeRow {...take} />);
 
@@ -29,8 +29,8 @@ describe('SendTakeRow', () => {
     ]);
   });
 
-  it('hands the take, its length and its captions to the section already open', () => {
-    window.location.hash = '#/process';
+  it('hands the take, its length, its captions and its source to the section already open', () => {
+    window.history.replaceState(null, '', '#/process');
     const seen: HandoffItem[] = [];
     const stop = subscribeHandoff('process', (item) => seen.push(item));
 
@@ -43,20 +43,27 @@ describe('SendTakeRow', () => {
       name: 'A take',
       duration: 12.5,
       captions: { srt: 'srt', vtt: 'vtt' },
+      from: 'studio',
     });
     expect(takeHandoff('process')).toBeNull();
   });
 
   it('queues for a section that is not open, and opens it without a history entry', () => {
-    window.location.hash = '#/convert';
+    window.history.replaceState(null, '', '#/convert');
     const depth = window.history.length;
+    const heard = vi.fn();
+    window.addEventListener('hashchange', heard);
 
     render(<SendTakeRow {...take} />);
     fireEvent.click(screen.getByRole('button', { name: 'Beat' }));
+    window.removeEventListener('hashchange', heard);
 
     expect(window.location.hash).toBe('#/song');
     // Replacing, not pushing: Back must not reopen the spent section as if undo.
     expect(window.history.length).toBe(depth);
+    // replaceState fires no hashchange of its own, so this is the router's only
+    // notice of the new section.
+    expect(heard).toHaveBeenCalledTimes(1);
     expect(takeHandoff('song')?.name).toBe('A take');
   });
 });

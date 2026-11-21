@@ -4,6 +4,24 @@
 
 export type HandoffTarget = 'convert' | 'transcribe' | 'process' | 'song';
 
+/** Any section that can send a take, including the two that only ever send. */
+export type HandoffSource = HandoffTarget | 'studio' | 'library';
+
+/** What each section is called in the UI, e.g. 'Shape' for `process`. */
+const SECTION_LABELS: Record<HandoffSource, string> = {
+  studio: 'Studio',
+  convert: 'Convert',
+  transcribe: 'Transcribe',
+  process: 'Shape',
+  song: 'Song',
+  library: 'Library',
+};
+
+/** Label for a section in prose, as in "Back to Convert". */
+export function sectionLabel(section: HandoffSource): string {
+  return SECTION_LABELS[section];
+}
+
 export interface HandoffItem {
   /** Take name without an extension; the receiving section adds its own. */
   name: string;
@@ -18,6 +36,11 @@ export interface HandoffItem {
    * words (Convert, Shape) passes them on again rather than losing them.
    */
   captions?: { srt: string; vtt: string };
+  /**
+   * The section that sent it. A hand-off replaces the history entry the user
+   * would have used to go back, so the receiver offers that way back itself.
+   */
+  from?: HandoffSource;
 }
 
 /** Sections a take can be sent to, with the label their button shows. */
@@ -71,16 +94,26 @@ export function subscribeHandoff(target: HandoffTarget, listener: Listener): () 
 }
 
 /**
- * Queue the take and open its section. The route is replaced rather than pushed:
- * assigning a hash adds a history entry, and Back would then reopen the section
- * the user came from with its take already consumed — an empty page that looks
- * like undo. Replacing leaves Back pointing where they actually came from. A
- * fragment-only replaceState still fires the hashchange the router listens for,
- * so the new section mounts and takes the item.
+ * Show `section`, replacing the route rather than pushing one. Assigning a hash
+ * would add an entry, and Back would then reopen a section whose take the
+ * hand-off already consumed — an empty page that looks like undo. Replacing
+ * leaves Back meaning "leave this flow".
+ *
+ * The History API never fires hashchange (MDN: pushState and replaceState both
+ * leave it alone, even when only the fragment changes), so the router — which
+ * only watches that event — is told by hand or the view would not swap.
  */
+export function openSection(section: HandoffSource): void {
+  if (typeof window === 'undefined') return;
+
+  window.history.replaceState(null, '', `#/${section}`);
+  window.dispatchEvent(new Event('hashchange'));
+}
+
+/** Queue the take, then open its section so it lands there. */
 export function sendTake(target: HandoffTarget, item: HandoffItem): void {
   sendHandoff(target, item);
-  if (typeof window !== 'undefined') window.history.replaceState(null, '', `#/${target}`);
+  openSection(target);
 }
 
 /**

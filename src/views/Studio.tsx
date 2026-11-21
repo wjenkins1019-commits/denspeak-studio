@@ -975,6 +975,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
               blob={take.blob}
               duration={take.duration}
               captions={take.captions}
+              from="studio"
             />
           )}
 

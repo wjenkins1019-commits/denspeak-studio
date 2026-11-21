@@ -212,6 +212,7 @@ export default function Convert() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
+              here="convert"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />
@@ -329,6 +330,7 @@ export default function Convert() {
               blob={take.blob}
               duration={take.duration}
               captions={take.captions}
+              from="convert"
             />
           </>
         )}

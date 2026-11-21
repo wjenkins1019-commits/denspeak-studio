@@ -5,7 +5,7 @@
 // hash and history depth; this one shows the section on screen changing.
 // Rendered under StrictMode, as the app is.
 import { StrictMode } from 'react';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { clearHandoff, sendTake } from './lib/handoff';
@@ -45,7 +45,10 @@ const originalRevokeObjectURL = URL.revokeObjectURL;
 
 beforeEach(() => {
   clearHandoff();
-  window.location.hash = '#/convert';
+  // Set the starting route without the event a hash assignment would leave
+  // queued: a stale hashchange arriving mid-test would swap sections on its own
+  // and hide a hand-off that failed to reach the router.
+  window.history.replaceState(null, '', '#/convert');
   URL.createObjectURL = vi.fn(() => 'blob:mock-url') as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
   // jsdom has no animation frames; decoding a beat waits for one.
@@ -61,7 +64,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
-  window.location.hash = '';
+  window.history.replaceState(null, '', window.location.pathname);
 });
 
 describe('hand-off navigation', () => {
@@ -80,5 +83,25 @@ describe('hand-off navigation', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
     expect(window.location.hash).toBe('#/song');
     expect(screen.queryByRole('heading', { level: 1, name: 'Change a recording' })).toBeNull();
+  });
+
+  it('takes the notice\'s way back to the section the take came from', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await act(async () => {
+      sendTake('song', { name: 'A take', blob: new Blob(['a']), duration: 1, from: 'convert' });
+    });
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Back to Convert' }));
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Change a recording' })).toBeTruthy();
+    expect(window.location.hash).toBe('#/convert');
   });
 });
