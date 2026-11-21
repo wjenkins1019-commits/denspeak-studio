@@ -12,6 +12,17 @@ import { clearHandoff, HANDOFF_TARGETS, takeHandoff } from '../lib/handoff';
 
 const arrived = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
 
+/** A section's take and queue, for rendering the region without a section. */
+const handoff = (overrides: Partial<HandoffTake<null>> = {}): HandoffTake<null> => ({
+  arrival: null,
+  waiting: 0,
+  failed: false,
+  next: () => {},
+  retry: () => {},
+  keep: () => {},
+  ...overrides,
+});
+
 afterEach(() => {
   cleanup();
   clearHandoff();
@@ -111,15 +122,6 @@ describe('HandoffNotice', () => {
 
   it('reports a failed next take under the notice, in a region already on the page', () => {
     window.history.replaceState(null, '', '#/song');
-    const handoff = (overrides: Partial<HandoffTake<null>> = {}): HandoffTake<null> => ({
-      arrival: null,
-      waiting: 0,
-      failed: false,
-      next: () => {},
-      retry: () => {},
-      keep: () => {},
-      ...overrides,
-    });
     const onScreen = { item: arrived, before: null };
 
     // Nothing has failed yet, but the region that will speak is already on the
@@ -146,5 +148,25 @@ describe('HandoffNotice', () => {
     // arrival or of the count behind it.
     expect(failure.textContent).not.toContain('Arrived from another section');
     expect(failure.textContent).not.toContain('1 more waiting');
+  });
+
+  it('announces an arrival from a region already on the page', () => {
+    window.history.replaceState(null, '', '#/song');
+
+    // The region that carries the arrival is on screen and empty before any take
+    // lands: a screen reader has already found it, so filling it is the change
+    // that gets read out.
+    const { rerender } = render(<HandoffStatus handoff={handoff()} />);
+    const [arrivals] = screen.getAllByRole('status');
+    expect(arrivals.textContent).toBe('');
+
+    rerender(
+      <HandoffStatus handoff={handoff({ arrival: { item: arrived, before: null }, waiting: 2 })} />,
+    );
+
+    const [filled] = screen.getAllByRole('status');
+    expect(filled).toBe(arrivals);
+    expect(filled.textContent).toContain('Arrived from another section: A take');
+    expect(filled.textContent).toContain('2 more waiting');
   });
 });

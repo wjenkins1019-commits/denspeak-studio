@@ -8,23 +8,25 @@ import type { HandoffTake } from '../lib/useHandoffTake';
  * waiting. A failed next take therefore sits under the notice instead of taking
  * away the way back to the take on screen.
  *
- * The failure's live region is on screen from the section's first render and
- * only its contents change with it: a status region added to the page already
+ * Both live regions are on screen from the section's first render and only
+ * their contents change with it: a status region added to the page already
  * holding its news is not reliably announced, while filling one that is already
  * there is.
  */
 export function HandoffStatus<S>({ handoff }: { handoff: HandoffTake<S> }) {
   return (
     <>
-      {handoff.arrival && (
-        <HandoffNotice
-          item={handoff.arrival.item}
-          replaced={handoff.arrival.before !== null}
-          waiting={handoff.waiting}
-          onNext={handoff.next}
-          onKeep={handoff.keep}
-        />
-      )}
+      <div role="status" aria-atomic="true">
+        {handoff.arrival && (
+          <HandoffNotice
+            item={handoff.arrival.item}
+            replaced={handoff.arrival.before !== null}
+            waiting={handoff.waiting}
+            onNext={handoff.next}
+            onKeep={handoff.keep}
+          />
+        )}
+      </div>
 
       <div role="status" aria-atomic="true">
         {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
@@ -77,9 +79,9 @@ export function HandoffNotice({
   ].filter(Boolean);
 
   return (
-    // A status message: the arrival is news, and nothing else on screen may
-    // have moved focus to it.
-    <div className="row between" role="status" aria-atomic="true">
+    // No live-region role of its own: it is placed inside the section's standing
+    // status region, so filling that region is what gets read aloud.
+    <div className="row between">
       <small className="muted">
         {returning ? 'Your take is back:' : 'Arrived from another section:'} {item.name}
         {notes.length > 0 ? ` — ${notes.join(' · ')}` : ''}
