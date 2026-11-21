@@ -56,6 +56,12 @@ jobs:
         if: github.event_name == 'push'
         run: node scripts/release-notes.mjs
 
+      # Guards the 0.3.4 bug: the sidecar must name the exact file that gets
+      # uploaded, or `sha256sum -c` fails for anyone who downloads the pair.
+      - name: Verify checksum names the published installer
+        if: github.event_name == 'push'
+        run: node scripts/verify-release-assets.mjs
+
       - name: Attach installer and checksum to release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
