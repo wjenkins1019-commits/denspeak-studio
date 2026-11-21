@@ -44,6 +44,31 @@ describe('timeStretch', () => {
     expect(hz).toBeGreaterThan(196);
     expect(hz).toBeLessThan(204);
   });
+
+  it('holds level on a low voice whose half period is past a fixed reach', () => {
+    const rate = 22_050;
+    // 85 Hz is a 259-sample period, so half of it is beyond the 64 samples the
+    // search used to be capped at: on this material that cap clipped the
+    // alignment and the overlap-add lost level (~0.9 dB measured).
+    const source = new Float32Array(rate);
+    for (let i = 0; i < source.length; i += 1) {
+      source[i] = 0.45 * Math.sin((2 * Math.PI * 85 * i) / rate);
+    }
+
+    const out = timeStretch(source, 1 / 0.9);
+    expect(out).toHaveLength(Math.round(source.length * (1 / 0.9)));
+
+    const from = Math.floor(rate / 2);
+    const span = Math.floor(rate / 5);
+    const rms = (samples: Float32Array) => {
+      let sum = 0;
+      for (let i = from; i < from + span; i += 1) sum += samples[i] * samples[i];
+      return Math.sqrt(sum / span);
+    };
+    const ratio = rms(out) / rms(source);
+    expect(ratio).toBeGreaterThan(0.97);
+    expect(ratio).toBeLessThan(1.03);
+  });
 });
 
 describe('resample', () => {

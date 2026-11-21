@@ -8,10 +8,13 @@ const FRAME = 1024;
 const HOP = 256;
 /** Sinc lobes each side of the resampling kernel; more is a gentler passband edge. */
 const SINC_LOBES = 12;
-/** How far either side of the nominal read position the time stretch may slide. */
-const WSOLA_SEARCH = 64;
+/** Pitch search range for the stretch, in samples: 55 Hz to 550 Hz at 22.05 kHz. */
+const PITCH_MIN_LAG = 40;
+const PITCH_MAX_LAG = 400;
+const MIN_SEARCH = 48;
+const MAX_SEARCH = 256;
 /** Samples compared when scoring a candidate frame: a couple of pitch periods. */
-const WSOLA_OVERLAP = 192;
+const WSOLA_OVERLAP = 320;
 /**
  * Output hop for the time stretch. Half a frame, so the Hann windows of
  * neighbouring frames sum to exactly one: copies that line up (which is what the
@@ -145,6 +148,119 @@ export function resample(input: Float32Array, factor: number): Float32Array {
 }
 
 /**
+ * How far either side of the nominal read position the time stretch may slide,
+ * which is half a pitch period: the nearest alignment that continues the last
+ * frame is never further away than that, and reaching further only lets a
+ * phrase part jump a whole period and drag its fricatives along with it.
+ *
+ * A fixed reach cannot serve both ends of the range — a low male voice is a
+ * 259-sample period at 22.05 kHz, so half of it is beyond the 64 that used to
+ * be hard-coded, while a female voice wants far less. So the period is read off
+ * the input once per call and the reach follows it.
+ */
+function searchReach(input: Float32Array): number {
+  const size = Math.min(2048, input.length);
+  if (size < PITCH_MAX_LAG * 2) return MIN_SEARCH;
+
+  // Pitch is easiest to read where there is signal, so start from the loudest
+  // window that still has room for a full lag.
+  let start = 0;
+  let loudest = -1;
+  for (let position = 0; position + size + PITCH_MAX_LAG <= input.length; position += size) {
+    let sum = 0;
+    for (let i = 0; i < size; i += 1) sum += input[position + i] * input[position + i];
+    if (sum > loudest) {
+      loudest = sum;
+      start = position;
+    }
+  }
+  if (loudest <= 0) return MIN_SEARCH;
+
+  const lags = PITCH_MAX_LAG - PITCH_MIN_LAG + 1;
+  const scores = new Float32Array(lags);
+  let peak = 0;
+  for (let lag = PITCH_MIN_LAG; lag <= PITCH_MAX_LAG; lag += 1) {
+    let dot = 0;
+    let left = 0;
+    let right = 0;
+    for (let i = 0; i < size; i += 2) {
+      const a = input[start + i];
+      const b = input[start + i + lag];
+      dot += a * b;
+      left += a * a;
+      right += b * b;
+    }
+    const score = dot / Math.sqrt(left * right + 1e-9);
+    scores[lag - PITCH_MIN_LAG] = score;
+    if (score > peak) peak = score;
+  }
+
+  // The first peak close to the best is the period; the ones after it are its
+  // multiples, and half of one of those would be a whole period too far.
+  if (peak < 0.3) return MIN_SEARCH;
+  for (let index = 1; index < lags - 1; index += 1) {
+    const score = scores[index];
+    if (score < peak * 0.85) continue;
+    if (score < scores[index - 1] || score < scores[index + 1]) continue;
+    return Math.min(MAX_SEARCH, Math.max(MIN_SEARCH, Math.round((index + PITCH_MIN_LAG) / 2)));
+  }
+  return MIN_SEARCH;
+}
+
+/**
+ * Candidate start whose first `overlap` samples best continue the audio at
+ * `template`, scored by normalised cross-correlation. `stride` trades
+ * resolution for speed; the score is scale-invariant, so a quieter candidate
+ * that matches the shape beats a loud one that only matches the level.
+ */
+function bestCandidate(
+  input: Float32Array,
+  template: number,
+  nominal: number,
+  from: number,
+  to: number,
+  overlap: number,
+  stride: number,
+): number {
+  const candidates: number[] = [];
+  const scores: number[] = [];
+  let best = -Infinity;
+
+  for (let candidate = from; candidate <= to; candidate += stride) {
+    let dot = 0;
+    let energy = 0;
+    for (let k = 0; k < overlap; k += stride) {
+      const a = template + k;
+      const b = input[candidate + k];
+      dot += (a < input.length ? input[a] : 0) * b;
+      energy += b * b;
+    }
+    const score = dot / Math.sqrt(energy + 1e-9);
+    candidates.push(candidate);
+    scores.push(score);
+    if (score > best) best = score;
+  }
+
+  // On voiced material every whole-period offset correlates about equally well,
+  // so taking the highest score would let a phrase part slide up to half a
+  // period away and drag the fricatives with it. Stay within a hair of the best
+  // score, then prefer the candidate nearest the nominal read position: the
+  // waveform still continues, and everything else stays where it was.
+  const margin = Math.abs(best) * 0.002;
+  let choice = candidates[0];
+  let nearest = Infinity;
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (scores[index] < best - margin) continue;
+    const distance = Math.abs(candidates[index] - nominal);
+    if (distance < nearest) {
+      nearest = distance;
+      choice = candidates[index];
+    }
+  }
+  return choice;
+}
+
+/**
  * Time stretch. `rate` > 1 makes the audio longer without changing its pitch;
  * `rate` < 1 shortens it.
  *
@@ -173,6 +289,7 @@ export function timeStretch(input: Float32Array, rate: number): Float32Array {
   // Last start that still holds a whole frame, so no frame is half zeros.
   const limit = Math.max(0, input.length - FRAME);
   const overlap = Math.min(WSOLA_OVERLAP, FRAME);
+  const reach = searchReach(input);
   /** Segment picked for the previous frame; -1 before the first one. */
   let previous = -1;
 
@@ -186,26 +303,21 @@ export function timeStretch(input: Float32Array, rate: number): Float32Array {
       // Where the last frame would continue if the sound just kept going, and
       // the window around the nominal position where it may actually live.
       const template = previous + WSOLA_HOP;
-      const from = Math.max(0, Math.min(nominal, limit) - WSOLA_SEARCH);
-      const to = Math.min(limit, nominal + WSOLA_SEARCH);
-      let best = -Infinity;
-      for (let candidate = from; candidate <= to; candidate += 1) {
-        let dot = 0;
-        let energy = 0;
-        for (let k = 0; k < overlap; k += 1) {
-          const a = template + k;
-          const b = candidate + k;
-          dot += (a < input.length ? input[a] : 0) * input[b];
-          energy += input[b] * input[b];
-        }
-        // Normalised, so a quieter candidate that matches the shape wins over
-        // a loud one that merely matches the level.
-        const score = dot / Math.sqrt(energy + 1e-9);
-        if (score > best) {
-          best = score;
-          start = candidate;
-        }
-      }
+      const from = Math.max(0, Math.min(nominal, limit) - reach);
+      const to = Math.min(limit, nominal + reach);
+      // Coarse-to-fine: every fourth lag at every fourth sample finds the right
+      // neighbourhood for a tenth of the work, then the full-rate pass picks
+      // the exact frame inside it. A flat search over this reach costs ~10x.
+      const coarse = bestCandidate(input, template, nominal, from, to, overlap, 4);
+      start = bestCandidate(
+        input,
+        template,
+        nominal,
+        Math.max(from, coarse - 4),
+        Math.min(to, coarse + 4),
+        overlap,
+        1,
+      );
     }
 
     for (let k = 0; k < FRAME; k += 1) {
