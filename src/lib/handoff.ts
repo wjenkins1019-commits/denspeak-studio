@@ -10,6 +10,14 @@ export interface HandoffItem {
   blob: Blob;
 }
 
+/** Sections a take can be sent to, with the label their button shows. */
+export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = [
+  { target: 'convert', label: 'Convert' },
+  { target: 'transcribe', label: 'Transcribe' },
+  { target: 'process', label: 'Shape' },
+  { target: 'song', label: 'Beat' },
+];
+
 let pending: { target: HandoffTarget; item: HandoffItem } | null = null;
 
 /** Queue a take for `target`; the next mount of that section picks it up. */

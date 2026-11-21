@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Library from './Library';
 import { formatSRT, formatVTT, offsetStoredCaptions, parseCues } from '../lib/captions';
+import { clearHandoff, takeHandoff } from '../lib/handoff';
 import type { Take } from '../lib/library';
 
 const { listTakesMock } = vi.hoisted(() => ({ listTakesMock: vi.fn() }));
@@ -28,6 +29,8 @@ const savedReadyDescriptor = Object.getOwnPropertyDescriptor(mediaProto, 'readyS
 let soughtTo: number | null;
 
 beforeEach(() => {
+  clearHandoff();
+  window.location.hash = '#/library';
   URL.createObjectURL = vi.fn(() => 'blob:mock-url') as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
   listTakesMock.mockReset();
@@ -44,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearHandoff();
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
   if (savedTimeDescriptor) Object.defineProperty(mediaProto, 'currentTime', savedTimeDescriptor);
@@ -61,6 +65,23 @@ function makeTake(id: string, name: string, captions: { srt: string; vtt: string
     captions,
   } as Take;
 }
+
+describe('Library send-on', () => {
+  it('queues a saved take for the section picked and opens that section', async () => {
+    listTakesMock.mockResolvedValue([
+      makeTake('take-a', 'Original take', { srt: '', vtt: '' }),
+    ]);
+
+    render(<Library />);
+    expect(await screen.findByText('Original take')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Shape' }));
+
+    expect(window.location.hash).toBe('#/process');
+    expect(takeHandoff('process')?.name).toBe('Original take');
+    expect(takeHandoff('convert')).toBeNull();
+  });
+});
 
 describe('Library caption search jump', () => {
   it('opens the hit take and seeks its Player to the shifted time', async () => {
