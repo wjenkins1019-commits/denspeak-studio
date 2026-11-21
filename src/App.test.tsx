@@ -85,6 +85,39 @@ describe('hand-off navigation', () => {
     expect(screen.queryByRole('heading', { level: 1, name: 'Change a recording' })).toBeNull();
   });
 
+  it('announces a take landing for another section, and not its decrements', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    // Let the rail's first read settle so it becomes the baseline.
+    await act(async () => {});
+    const announcer = () => document.getElementById('handoff-announcer');
+    expect(announcer()?.getAttribute('role')).toBe('status');
+    expect(announcer()?.getAttribute('aria-live')).toBe('polite');
+    expect(announcer()?.textContent).toBe('');
+
+    await act(async () => {
+      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
+    });
+    expect(announcer()?.textContent).toBe('1 take waiting for Song');
+
+    await act(async () => {
+      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
+    });
+    expect(announcer()?.textContent).toBe('2 takes waiting for Song');
+
+    // Taking one lowers the count; nothing is read for the fall, and the stale
+    // line is withdrawn so it cannot be mistaken for the current count.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+    expect(await screen.findByText(/1 more waiting/)).toBeTruthy();
+    expect(announcer()?.textContent).toBe('');
+  });
+
   it('opens what is waiting for a section from its rail count, without taking it', async () => {
     render(
       <StrictMode>

@@ -9,6 +9,7 @@ import {
   type HandoffTarget,
 } from './lib/handoff';
 import { usePendingCounts } from './lib/useHandoffTake';
+import { waitingAnnouncement, waitingFell } from './lib/waitingAnnouncement';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
 import { QueuePanel } from './components/QueuePanel';
@@ -44,6 +45,15 @@ const NAV: Array<{ id: Route; label: string; hint: string }> = [
   { id: 'settings', label: 'Settings', hint: 'Defaults and cache' },
 ];
 
+/** What the rail calls each receiving section, read aloud with its count. */
+const RAIL_LABELS: Record<HandoffTarget, string> = {
+  studio: 'Studio',
+  convert: 'Convert',
+  transcribe: 'Transcribe',
+  process: 'Shape',
+  song: 'Song',
+};
+
 function readRoute(): Route {
   const hash = window.location.hash.replace(/^#\/?/, '');
   return (ROUTES as readonly string[]).includes(hash) ? (hash as Route) : 'studio';
@@ -61,12 +71,28 @@ export default function App() {
   // The section whose queue the rail count opened, if any.
   const [queuePanel, setQueuePanel] = useState<HandoffTarget | null>(null);
   const queueReturn = useRef<HTMLButtonElement | null>(null);
+  // One live region speaks for the rail; it only carries increases.
+  const [announcement, setAnnouncement] = useState('');
+  const announcedCounts = useRef<Partial<Record<HandoffTarget, number>> | null>(null);
 
   // index.html sets the same attribute before the first paint, so a light UI
   // does not flash dark on load; this keeps it in step after a change.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const before = announcedCounts.current;
+    announcedCounts.current = waitingBySection;
+    // Nothing has landed before the first read; it is only the baseline.
+    if (!before) return;
+
+    const landed = waitingAnnouncement(before, waitingBySection, route, (target) => RAIL_LABELS[target]);
+    // A fall is a take being picked up or discarded, not an arrival: nothing
+    // is spoken, but the old line goes so it cannot be read as current.
+    if (landed) setAnnouncement(landed);
+    else if (waitingFell(before, waitingBySection)) setAnnouncement('');
+  }, [route, waitingBySection]);
 
   useEffect(() => {
     const onHashChange = () => setRoute(readRoute());
@@ -126,6 +152,15 @@ export default function App() {
 
   return (
     <div className="shell">
+      <div
+        className="sr-only"
+        id="handoff-announcer"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {announcement}
+      </div>
       <aside className="rail">
         <div className="brand">
           <span className="brand-mark">
