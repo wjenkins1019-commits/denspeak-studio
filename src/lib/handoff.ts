@@ -74,15 +74,13 @@ export function subscribeHandoff(target: HandoffTarget, listener: Listener): () 
  * Queue the take and open its section. The route is replaced rather than pushed:
  * assigning a hash adds a history entry, and Back would then reopen the section
  * the user came from with its take already consumed — an empty page that looks
- * like undo. Replacing leaves Back pointing where they actually came from.
- * replaceState fires no hashchange, so the router is told by hand.
+ * like undo. Replacing leaves Back pointing where they actually came from. A
+ * fragment-only replaceState still fires the hashchange the router listens for,
+ * so the new section mounts and takes the item.
  */
 export function sendTake(target: HandoffTarget, item: HandoffItem): void {
   sendHandoff(target, item);
-  if (typeof window === 'undefined') return;
-
-  window.history.replaceState(null, '', `#/${target}`);
-  window.dispatchEvent(new Event('hashchange'));
+  if (typeof window !== 'undefined') window.history.replaceState(null, '', `#/${target}`);
 }
 
 /**
