@@ -1,7 +1,7 @@
 // Tests for the WAV writer and parser: header layout, clipping behaviour,
 // error cases, and a lossless-enough round trip through both.
 import { describe, expect, it } from 'vitest';
-import { decodeWavPcm, encodeWav, resample } from './audio';
+import { decodeWavPcm, encodeWav, resample, timeStretch } from './audio';
 
 function tone(length = 256, rate = 22_050): Float32Array {
   const samples = new Float32Array(length);
@@ -10,6 +10,41 @@ function tone(length = 256, rate = 22_050): Float32Array {
   }
   return samples;
 }
+
+describe('timeStretch', () => {
+  it('changes duration without changing pitch or level', () => {
+    const rate = 22_050;
+    const source = new Float32Array(rate);
+    for (let i = 0; i < source.length; i += 1) {
+      source[i] = 0.5 * Math.sin((2 * Math.PI * 200 * i) / rate);
+    }
+
+    const out = timeStretch(source, 1.2);
+    expect(out).toHaveLength(Math.round(source.length * 1.2));
+
+    // A coherent stretch must neither gain nor lose the tone: normalising by
+    // the window power instead of its sum left this ~2.5 dB hot.
+    const from = Math.floor(rate / 2);
+    const span = Math.floor(rate / 5);
+    const rms = (samples: Float32Array) => {
+      let sum = 0;
+      for (let i = from; i < from + span; i += 1) sum += samples[i] * samples[i];
+      return Math.sqrt(sum / span);
+    };
+    const ratio = rms(out) / rms(source);
+    expect(ratio).toBeGreaterThan(0.97);
+    expect(ratio).toBeLessThan(1.03);
+
+    // 200 Hz is 400 zero crossings per second, stretched or not.
+    let crossings = 0;
+    for (let i = 1; i < out.length; i += 1) {
+      if (out[i - 1] < 0 !== out[i] < 0) crossings += 1;
+    }
+    const hz = crossings / 2 / (out.length / rate);
+    expect(hz).toBeGreaterThan(196);
+    expect(hz).toBeLessThan(204);
+  });
+});
 
 describe('resample', () => {
   it('keeps the passband: a 6 kHz tone survives a small ratio', () => {

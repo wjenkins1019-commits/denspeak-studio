@@ -8,6 +8,16 @@ const FRAME = 1024;
 const HOP = 256;
 /** Sinc lobes each side of the resampling kernel; more is a gentler passband edge. */
 const SINC_LOBES = 12;
+/** How far either side of the nominal read position the time stretch may slide. */
+const WSOLA_SEARCH = 64;
+/** Samples compared when scoring a candidate frame: a couple of pitch periods. */
+const WSOLA_OVERLAP = 192;
+/**
+ * Output hop for the time stretch. Half a frame, so the Hann windows of
+ * neighbouring frames sum to exactly one: copies that line up (which is what the
+ * search arranges) then add back to unity gain instead of overshooting.
+ */
+const WSOLA_HOP = FRAME / 2;
 
 export interface VoiceShape {
   /** Pitch shift in semitones, roughly -14..14. */
@@ -135,69 +145,84 @@ export function resample(input: Float32Array, factor: number): Float32Array {
 }
 
 /**
- * Phase-vocoder time stretch. `rate` > 1 makes the audio longer without changing
- * its pitch; `rate` < 1 shortens it.
+ * Time stretch. `rate` > 1 makes the audio longer without changing its pitch;
+ * `rate` < 1 shortens it.
+ *
+ * This used to be a phase vocoder, and a phase vocoder is the wrong tool for the
+ * speed control. It keeps the magnitude of each frame but loses the phase
+ * relationship between the bins that make up one partial, so their overlap-add
+ * contributions partly cancel: on speech that lands on the consonants, which
+ * turn soft and airy and take the top end with them.
+ *
+ * WSOLA works in the time domain instead. It copies real input frames, and
+ * before each one it slides a short search window to wherever the waveform
+ * continues most naturally, scored by normalised cross-correlation against the
+ * tail of the frame just written. Nothing is rewritten spectrally, so there is
+ * no phasiness, and harmonics and noise bursts come out as they went in. Pitch
+ * is untouched because the waveform is never resampled.
  */
 export function timeStretch(input: Float32Array, rate: number): Float32Array {
   if (input.length < FRAME || Math.abs(rate - 1) < 0.001) return input.slice();
 
-  const synthesisHop = Math.max(1, Math.round(HOP * rate));
   const window = hann(FRAME);
-  const bins = FRAME / 2 + 1;
-  const outputLength = Math.ceil((input.length / HOP) * synthesisHop) + FRAME;
-  const output = new Float32Array(outputLength);
-  const normalization = new Float32Array(outputLength);
+  const outputLength = Math.max(1, Math.round(input.length * rate));
+  const padded = outputLength + FRAME;
+  const output = new Float32Array(padded);
+  const normalization = new Float32Array(padded);
 
-  const re = new Float32Array(FRAME);
-  const im = new Float32Array(FRAME);
-  const lastPhase = new Float32Array(bins);
-  const sumPhase = new Float32Array(bins);
-  const expected = new Float32Array(bins);
-  for (let k = 0; k < bins; k += 1) expected[k] = (2 * Math.PI * k * HOP) / FRAME;
+  // Last start that still holds a whole frame, so no frame is half zeros.
+  const limit = Math.max(0, input.length - FRAME);
+  const overlap = Math.min(WSOLA_OVERLAP, FRAME);
+  /** Segment picked for the previous frame; -1 before the first one. */
+  let previous = -1;
 
-  let writePosition = 0;
-  for (let readPosition = 0; readPosition < input.length; readPosition += HOP) {
-    for (let i = 0; i < FRAME; i += 1) {
-      const sample = readPosition + i < input.length ? input[readPosition + i] : 0;
-      re[i] = sample * window[i];
-      im[i] = 0;
-    }
+  // The output advances by a fixed hop while the read position advances by
+  // hop / rate, which is what makes the result longer or shorter.
+  for (let write = 0; write < outputLength; write += WSOLA_HOP) {
+    const nominal = Math.round(write / rate);
+    let start = Math.min(nominal, limit);
 
-    fft(re, im, false);
-
-    for (let k = 0; k < bins; k += 1) {
-      const magnitude = Math.hypot(re[k], im[k]);
-      const phase = Math.atan2(im[k], re[k]);
-      let delta = phase - lastPhase[k] - expected[k];
-      delta -= 2 * Math.PI * Math.round(delta / (2 * Math.PI));
-      lastPhase[k] = phase;
-      sumPhase[k] += (expected[k] + delta) * (synthesisHop / HOP);
-
-      re[k] = magnitude * Math.cos(sumPhase[k]);
-      im[k] = magnitude * Math.sin(sumPhase[k]);
-      if (k > 0 && k < FRAME / 2) {
-        re[FRAME - k] = re[k];
-        im[FRAME - k] = -im[k];
+    if (previous >= 0) {
+      // Where the last frame would continue if the sound just kept going, and
+      // the window around the nominal position where it may actually live.
+      const template = previous + WSOLA_HOP;
+      const from = Math.max(0, Math.min(nominal, limit) - WSOLA_SEARCH);
+      const to = Math.min(limit, nominal + WSOLA_SEARCH);
+      let best = -Infinity;
+      for (let candidate = from; candidate <= to; candidate += 1) {
+        let dot = 0;
+        let energy = 0;
+        for (let k = 0; k < overlap; k += 1) {
+          const a = template + k;
+          const b = candidate + k;
+          dot += (a < input.length ? input[a] : 0) * input[b];
+          energy += input[b] * input[b];
+        }
+        // Normalised, so a quieter candidate that matches the shape wins over
+        // a loud one that merely matches the level.
+        const score = dot / Math.sqrt(energy + 1e-9);
+        if (score > best) {
+          best = score;
+          start = candidate;
+        }
       }
     }
 
-    fft(re, im, true);
-
-    for (let i = 0; i < FRAME; i += 1) {
-      const index = writePosition + i;
-      if (index >= outputLength) break;
-      output[index] += re[i] * window[i];
-      normalization[index] += window[i] * window[i];
+    for (let k = 0; k < FRAME; k += 1) {
+      const index = write + k;
+      if (index >= padded) break;
+      output[index] += input[start + k] * window[k];
+      normalization[index] += window[k];
     }
 
-    writePosition += synthesisHop;
+    previous = start;
   }
 
-  for (let i = 0; i < outputLength; i += 1) {
+  for (let i = 0; i < padded; i += 1) {
     if (normalization[i] > 1e-6) output[i] /= normalization[i];
   }
 
-  return output.slice(0, Math.max(1, Math.round(input.length * rate)));
+  return output.slice(0, outputLength);
 }
 
 /**

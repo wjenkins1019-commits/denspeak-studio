@@ -19,9 +19,10 @@ import type { ParsedBook } from './ebook';
  * adopted instead of re-rendered, so without this a take saved by an older
  * chain would be handed back as "this exact render" and the change would never
  * be heard. Version 2: the per-phrase shaping resamples instead of running the
- * phase vocoder twice.
+ * phase vocoder twice. Version 3: the speed control stretches in the time
+ * domain, so a take rendered at a speed other than 1 sounds different.
  */
-export const RENDER_CHAIN_VERSION = 2;
+export const RENDER_CHAIN_VERSION = 3;
 
 /** FNV-1a over chain version + text + settings + voice: one exact render. */
 export function jobFingerprint(input: {
