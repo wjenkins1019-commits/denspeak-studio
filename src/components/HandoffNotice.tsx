@@ -1,4 +1,41 @@
 import { currentSection, returnTake, sectionLabel, type HandoffItem } from '../lib/handoff';
+import type { HandoffTake } from '../lib/useHandoffTake';
+
+/**
+ * Everything a receiving section says about its take and its queue, in one
+ * place so the order is decided once: the notice for the take on screen, then a
+ * take that would not open, then — only when neither is talking — what is still
+ * waiting. A failed next take therefore sits under the notice instead of taking
+ * away the way back to the take on screen.
+ *
+ * The failure's live region is on screen from the section's first render and
+ * only its contents change with it: a status region added to the page already
+ * holding its news is not reliably announced, while filling one that is already
+ * there is.
+ */
+export function HandoffStatus<S>({ handoff }: { handoff: HandoffTake<S> }) {
+  return (
+    <>
+      {handoff.arrival && (
+        <HandoffNotice
+          item={handoff.arrival.item}
+          replaced={handoff.arrival.before !== null}
+          waiting={handoff.waiting}
+          onNext={handoff.next}
+          onKeep={handoff.keep}
+        />
+      )}
+
+      <div role="status" aria-atomic="true">
+        {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
+      </div>
+
+      {!handoff.arrival && !handoff.failed && (
+        <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
+      )}
+    </>
+  );
+}
 
 /**
  * Reports a take that arrived from another section. When it landed on top of a
@@ -91,7 +128,9 @@ export function WaitingTakes({ waiting, onNext }: { waiting: number; onNext: () 
  */
 export function HandoffFailed({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="row between" role="status" aria-atomic="true">
+    // No live-region role of its own: it is placed inside the section's standing
+    // status region, so filling that region is what gets read aloud.
+    <div className="row between">
       <small className="muted">
         Couldn’t open your take — its saved copy wouldn’t clear, so it is still waiting.
       </small>

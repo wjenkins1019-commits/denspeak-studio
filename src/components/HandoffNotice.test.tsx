@@ -6,7 +6,8 @@
 // sender can never be offered a way "back" to itself.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HandoffNotice, WaitingTakes } from './HandoffNotice';
+import { HandoffNotice, HandoffStatus, WaitingTakes } from './HandoffNotice';
+import type { HandoffTake } from '../lib/useHandoffTake';
 import { clearHandoff, HANDOFF_TARGETS, takeHandoff } from '../lib/handoff';
 
 const arrived = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
@@ -106,5 +107,44 @@ describe('HandoffNotice', () => {
 
     expect(screen.getByText(/Arrived from another section: A take/)).toBeTruthy();
     expect(screen.queryByText(/Your take is back/)).toBeNull();
+  });
+
+  it('reports a failed next take under the notice, in a region already on the page', () => {
+    window.history.replaceState(null, '', '#/song');
+    const handoff = (overrides: Partial<HandoffTake<null>> = {}): HandoffTake<null> => ({
+      arrival: null,
+      waiting: 0,
+      failed: false,
+      next: () => {},
+      retry: () => {},
+      keep: () => {},
+      ...overrides,
+    });
+    const onScreen = { item: arrived, before: null };
+
+    // Nothing has failed yet, but the region that will speak is already on the
+    // page and empty: filling a region a screen reader knows about is what gets
+    // announced, while a region inserted already holding its news is not.
+    const { rerender } = render(<HandoffStatus handoff={handoff({ waiting: 1 })} />);
+    const [empty] = screen.getAllByRole('status');
+    expect(empty.textContent).toBe('');
+
+    rerender(<HandoffStatus handoff={handoff({ arrival: onScreen, waiting: 1 })} />);
+    const [notice] = screen.getAllByRole('status');
+    const noticeText = notice.textContent;
+
+    // A next take fails: one message is added, and the notice for the take on
+    // screen is the same node saying the same thing, so it is not read twice.
+    rerender(<HandoffStatus handoff={handoff({ arrival: onScreen, waiting: 1, failed: true })} />);
+    const [stillNotice, failure] = screen.getAllByRole('status');
+
+    expect(stillNotice).toBe(notice);
+    expect(stillNotice.textContent).toBe(noticeText);
+    expect(failure.textContent).toContain('wouldn’t clear, so it is still waiting');
+    expect(failure.textContent).toContain('Try again');
+    // What is read aloud is the new news only, not a second telling of the
+    // arrival or of the count behind it.
+    expect(failure.textContent).not.toContain('Arrived from another section');
+    expect(failure.textContent).not.toContain('1 more waiting');
   });
 });

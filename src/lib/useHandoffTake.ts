@@ -37,6 +37,22 @@ export interface HandoffArrival<S> {
   before: S | null;
 }
 
+/** What a receiving section says about its take and its queue. */
+export interface HandoffTake<S> {
+  /** The take this section was handed, with what it replaced. */
+  arrival: HandoffArrival<S> | null;
+  /** How many takes are still waiting behind the one on screen. */
+  waiting: number;
+  /** Whether a queued take could not be opened, and is still waiting. */
+  failed: boolean;
+  /** Take the next queued take without leaving the section. */
+  next: () => void;
+  /** Try the take that failed to open again. */
+  retry: () => void;
+  /** Put back what the section had before the arrival, and close the notice. */
+  keep: () => void;
+}
+
 /**
  * Take a hand-off for `target` — one queued before the section opened, or one
  * sent while it is open. `current` is what the section holds right now, kept so
@@ -50,7 +66,7 @@ export function useHandoffTake<S>(
   current: S | null,
   apply: (item: HandoffItem) => void,
   restore: (before: S) => void,
-) {
+): HandoffTake<S> {
   const [arrival, setArrival] = useState<HandoffArrival<S> | null>(null);
   const [waiting, setWaiting] = useState(0);
   // A take whose row would not delete stays queued. The section says so and

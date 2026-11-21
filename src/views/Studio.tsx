@@ -56,7 +56,7 @@ import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffFailed, HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
+import { HandoffStatus } from '../components/HandoffNotice';
 import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 import type { HandoffItem } from '../lib/handoff';
 
@@ -982,23 +982,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             />
           )}
 
-          {handoff.arrival && (
-            <HandoffNotice
-              item={handoff.arrival.item}
-              replaced={handoff.arrival.before !== null}
-              waiting={handoff.waiting}
-              onNext={handoff.next}
-              onKeep={handoff.keep}
-            />
-          )}
-
-          {/* Beside the notice, not instead of it: a next take that would not
-              open must not take away the way back to the one on screen. */}
-          {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
-
-          {!handoff.arrival && !handoff.failed && (
-            <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
-          )}
+          <HandoffStatus handoff={handoff} />
 
           {received && (
             <div className="stack">

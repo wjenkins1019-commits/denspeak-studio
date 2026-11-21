@@ -22,7 +22,7 @@ import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffFailed, HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
+import { HandoffStatus } from '../components/HandoffNotice';
 import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
@@ -390,23 +390,7 @@ export default function Process() {
           </div>
           <LiveLevelMeter stream={meterStream} />
 
-          {handoff.arrival && (
-            <HandoffNotice
-              item={handoff.arrival.item}
-              replaced={handoff.arrival.before !== null}
-              waiting={handoff.waiting}
-              onNext={handoff.next}
-              onKeep={handoff.keep}
-            />
-          )}
-
-          {/* Beside the notice, not instead of it: a next take that would not
-              open must not take away the way back to the one on screen. */}
-          {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
-
-          {!handoff.arrival && !handoff.failed && (
-            <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
-          )}
+          <HandoffStatus handoff={handoff} />
 
           {source && (
             <div className="stack">
