@@ -763,8 +763,13 @@ input[type='file']::file-selector-button:hover {
   width: 100%;
   height: auto;
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  background: var(--surface-soft);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 90% at 50% -25%, var(--glow), transparent 62%),
+    linear-gradient(180deg, var(--surface), var(--surface-soft));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 40px rgba(2, 8, 20, 0.28);
   touch-action: none;
 }
 
@@ -772,6 +777,8 @@ input[type='file']::file-selector-button:hover {
   font-size: 12px;
   fill: var(--dim);
   font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
 }
 
 .eq-graph .eq-grid {
@@ -779,10 +786,32 @@ input[type='file']::file-selector-button:hover {
   stroke-width: 1;
 }
 
+.eq-graph .eq-tick {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
 .eq-graph .eq-zero {
   stroke: var(--line-strong);
   stroke-width: 1;
-  stroke-dasharray: 4 4;
+}
+
+.eq-graph .eq-curve {
+  filter: drop-shadow(0 2px 12px var(--glow));
+}
+
+.eq-graph .eq-band .eq-halo {
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.eq-graph .eq-band:hover .eq-halo,
+.eq-graph .eq-band.dragging .eq-halo {
+  opacity: 1;
+}
+
+.eq-graph .eq-node {
+  transition: stroke 140ms ease;
 }
 
 .eq-graph.draggable .eq-node {
@@ -793,9 +822,16 @@ input[type='file']::file-selector-button:hover {
   cursor: grabbing;
 }
 
-.eq-graph .eq-readout {
-  font-size: 13px;
+.eq-graph .eq-readout rect {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.eq-graph .eq-readout text {
+  font-size: 11px;
   fill: var(--text);
+  letter-spacing: 0;
 }
 
 .kv {
