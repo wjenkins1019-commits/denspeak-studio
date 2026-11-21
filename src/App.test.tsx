@@ -169,6 +169,51 @@ describe('hand-off navigation', () => {
     expect(screen.queryByRole('button', { name: /take waiting for Song/ })).toBeNull();
   });
 
+  it('leaves the on-screen section’s count to its notice and keeps the others', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
+      sendHandoff('process', { name: 'Shape take', blob: new Blob(['c']), duration: 3 });
+    });
+
+    // Both counts are on the rail while those sections are elsewhere.
+    expect(screen.getByRole('button', { name: /2 takes waiting for Song/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /1 take waiting for Shape/ })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
+    // Song took one, so one is left — said by the notice, not the rail.
+    expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+    // A section that is not on screen keeps its count.
+    expect(screen.getByRole('button', { name: /1 take waiting for Shape/ })).toBeTruthy();
+
+    // A take sent while Song is open lands there; the queue behind stays at one.
+    await act(async () => {
+      sendHandoff('song', { name: 'Third take', blob: new Blob(['d']), duration: 4 });
+    });
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+
+    // Taking the last queued take empties the notice's count as well.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
+
+    expect(screen.queryByText(/more waiting/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
+  });
+
   it('takes the notice\'s way back to the section the take came from', async () => {
     render(
       <StrictMode>

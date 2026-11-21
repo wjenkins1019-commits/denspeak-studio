@@ -153,7 +153,9 @@ export default function App() {
                   <span className="nav-label">{item.label}</span>
                   <small>{item.hint}</small>
                 </button>
-                {target && waiting > 0 && (
+                {/* The open section already reports its queue in the notice;
+                    a count beside it would only repeat that. */}
+                {target && waiting > 0 && route !== target && (
                   <button
                     className="nav-count"
                     aria-haspopup="dialog"
