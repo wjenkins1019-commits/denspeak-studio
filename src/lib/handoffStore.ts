@@ -84,12 +84,11 @@ export const indexedDbHandoffStore: HandoffStore = {
   },
 
   async remove(key: string): Promise<void> {
+    // No database means no row that could come back.
     if (!hasDatabase()) return;
-    try {
-      const db = await openDb();
-      await requestToPromise(db.transaction(STORE, 'readwrite').objectStore(STORE).delete(key));
-    } catch {
-      // A take that cannot be deleted from disk is filtered by `consumed`.
-    }
+    // Left to throw on purpose: taking a take waits for this delete, and a
+    // failure has to stay queued rather than arrive again on the next run.
+    const db = await openDb();
+    await requestToPromise(db.transaction(STORE, 'readwrite').objectStore(STORE).delete(key));
   },
 };

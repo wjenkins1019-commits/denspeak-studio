@@ -78,8 +78,8 @@ describe('Library send-on', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Shape' }));
 
     expect(window.location.hash).toBe('#/process');
-    expect(takeHandoff('process')?.name).toBe('Original take');
-    expect(takeHandoff('convert')).toBeNull();
+    expect((await takeHandoff('process'))?.name).toBe('Original take');
+    expect(await takeHandoff('convert')).toBeNull();
   });
 });
 

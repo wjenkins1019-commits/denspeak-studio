@@ -59,22 +59,25 @@ export function useHandoffTake<S>(
   const latest = useRef({ current, apply, restore });
   latest.current = { current, apply, restore };
 
-  // Whether this visit already has its take. StrictMode mounts the view,
-  // cleans up and mounts it again in development; if the second subscription
-  // took one too, it would drain the next take and replace the arrival that
-  // was already on screen, losing the first one without a word.
-  const landed = useRef(false);
+  // Whether this visit has asked for its take. StrictMode mounts the view,
+  // cleans up and mounts it again in development; a second subscription that
+  // asked again would drain the next take and replace the arrival, losing one
+  // without a word.
+  const asked = useRef(false);
 
   /** Land `item`, then take stock of what is still queued behind it. */
   function deliver(item: HandoffItem) {
     const before = latest.current.current;
     latest.current.apply(item);
-    landed.current = true;
     setArrival({ item, before });
     setWaiting(pendingCount(target));
   }
 
-  useEffect(() => subscribeHandoff(target, deliver, { take: !landed.current }), [target]);
+  useEffect(() => {
+    const take = !asked.current;
+    asked.current = true;
+    return subscribeHandoff(target, deliver, { take });
+  }, [target]);
 
   // A queued take can be discarded from the rail while this section is open;
   // keep "N more waiting" honest rather than leaving a count for audio that is
@@ -87,9 +90,10 @@ export function useHandoffTake<S>(
     waiting,
     /** Take the next queued take without leaving the section. */
     next: () => {
-      const item = takeHandoff(target);
-      if (item) deliver(item);
-      else setWaiting(0);
+      void takeHandoff(target).then((item) => {
+        if (item) deliver(item);
+        else setWaiting(pendingCount(target));
+      });
     },
     /** Put back what the section had before the arrival, and close the notice. */
     keep: () => {

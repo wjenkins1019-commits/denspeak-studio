@@ -30,56 +30,56 @@ const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as con
 describe('handoff', () => {
   beforeEach(clearHandoff);
 
-  it('gives the queued take to its target once', () => {
+  it('gives the queued take to its target once', async () => {
     sendHandoff('convert', item);
 
-    expect(takeHandoff('convert')).toEqual(item);
-    expect(takeHandoff('convert')).toBeNull();
+    expect(await takeHandoff('convert')).toEqual(item);
+    expect(await takeHandoff('convert')).toBeNull();
   });
 
-  it('leaves a take queued for another section alone', () => {
+  it('leaves a take queued for another section alone', async () => {
     sendHandoff('transcribe', item);
 
-    expect(takeHandoff('process')).toBeNull();
-    expect(takeHandoff('transcribe')).toEqual(item);
+    expect(await takeHandoff('process')).toBeNull();
+    expect(await takeHandoff('transcribe')).toEqual(item);
   });
 
-  it('returns nothing when nothing is queued', () => {
-    expect(takeHandoff('song')).toBeNull();
+  it('returns nothing when nothing is queued', async () => {
+    expect(await takeHandoff('song')).toBeNull();
   });
 
-  it('holds a take for each section, so a second send cannot overwrite the first', () => {
+  it('holds a take for each section, so a second send cannot overwrite the first', async () => {
     sendHandoff('convert', item);
     sendHandoff('transcribe', { ...item, name: 'Another take' });
 
-    expect(takeHandoff('transcribe')).toMatchObject({ name: 'Another take' });
+    expect(await takeHandoff('transcribe')).toMatchObject({ name: 'Another take' });
     // The take sent first was still waiting for its own section.
-    expect(takeHandoff('convert')).toEqual(item);
+    expect(await takeHandoff('convert')).toEqual(item);
   });
 
-  it('holds more than one take for the same section, oldest first', () => {
+  it('holds more than one take for the same section, oldest first', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
 
-    expect(takeHandoff('convert')).toEqual(item);
-    expect(takeHandoff('convert')).toMatchObject({ name: 'Second take' });
-    expect(takeHandoff('convert')).toBeNull();
+    expect(await takeHandoff('convert')).toEqual(item);
+    expect(await takeHandoff('convert')).toMatchObject({ name: 'Second take' });
+    expect(await takeHandoff('convert')).toBeNull();
   });
 
-  it('hands a section one queued take per visit, leaving the rest waiting', () => {
+  it('hands a section one queued take per visit, leaving the rest waiting', async () => {
     sendHandoff('song', item);
     sendHandoff('song', { ...item, name: 'Second take' });
     const seen: string[] = [];
 
     const stop = subscribeHandoff('song', (handed) => seen.push(handed.name));
+    await vi.waitFor(() => expect(seen).toEqual(['A take']));
     stop();
 
-    expect(seen).toEqual(['A take']);
     // Not discarded: the next visit still has it rather than an empty section.
-    expect(takeHandoff('song')).toMatchObject({ name: 'Second take' });
+    expect(await takeHandoff('song')).toMatchObject({ name: 'Second take' });
   });
 
-  it('hands a take straight to the section that is already open', () => {
+  it('hands a take straight to the section that is already open', async () => {
     const seen: string[] = [];
     const stop = subscribeHandoff('convert', (handed) => seen.push(handed.name));
 
@@ -87,10 +87,10 @@ describe('handoff', () => {
     stop();
 
     expect(seen).toEqual(['A take']);
-    expect(takeHandoff('convert')).toBeNull();
+    expect(await takeHandoff('convert')).toBeNull();
   });
 
-  it('joins without taking when asked to, and still receives a take sent while open', () => {
+  it('joins without taking when asked to, and still receives a take sent while open', async () => {
     sendHandoff('song', item);
     const seen: string[] = [];
 
@@ -108,27 +108,27 @@ describe('handoff', () => {
     expect(seen).toEqual(['Second take']);
     // The queued take is still the next visit's, not a second delivery.
     expect(pendingCount('song')).toBe(1);
-    expect(takeHandoff('song')).toEqual(item);
+    expect(await takeHandoff('song')).toEqual(item);
   });
 
-  it('queues again once the section has closed', () => {
+  it('queues again once the section has closed', async () => {
     const stop = subscribeHandoff('song', () => {});
     stop();
 
     sendHandoff('song', item);
 
-    expect(takeHandoff('song')).toEqual(item);
+    expect(await takeHandoff('song')).toEqual(item);
   });
 
-  it('gives a take queued before the section opened to its first subscriber', () => {
+  it('gives a take queued before the section opened to its first subscriber', async () => {
     sendHandoff('song', item);
     const seen: string[] = [];
 
     const stop = subscribeHandoff('song', (handed) => seen.push(handed.name));
+    await vi.waitFor(() => expect(seen).toEqual(['A take']));
     stop();
 
-    expect(seen).toEqual(['A take']);
-    expect(takeHandoff('song')).toBeNull();
+    expect(await takeHandoff('song')).toBeNull();
   });
 
   it('lists a section’s queue oldest first without taking anything', () => {
@@ -141,7 +141,7 @@ describe('handoff', () => {
     expect(pendingCount('convert')).toBe(2);
   });
 
-  it('discards one queued take and leaves the rest', () => {
+  it('discards one queued take and leaves the rest', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
     const [oldest] = queuedTakes('convert');
@@ -152,7 +152,7 @@ describe('handoff', () => {
     expect(pendingCount('convert')).toBe(1);
     // A key that is gone is not silently discarded twice.
     expect(discardHandoff('convert', oldest.key)).toBe(false);
-    expect(takeHandoff('convert')).toMatchObject({ name: 'Second take' });
+    expect(await takeHandoff('convert')).toMatchObject({ name: 'Second take' });
   });
 
   it('clears a section’s queue without touching another section', () => {
@@ -166,7 +166,7 @@ describe('handoff', () => {
     expect(discardHandoffQueue('convert')).toBe(0);
   });
 
-  it('keeps a section out of another section’s take', () => {
+  it('keeps a section out of another section’s take', async () => {
     const seen: string[] = [];
     const stop = subscribeHandoff('convert', (handed) => seen.push(handed.name));
 
@@ -174,7 +174,7 @@ describe('handoff', () => {
     stop();
 
     expect(seen).toEqual([]);
-    expect(takeHandoff('process')).toEqual(item);
+    expect(await takeHandoff('process')).toEqual(item);
   });
 });
 
@@ -198,27 +198,27 @@ describe('returnTake', () => {
     window.history.replaceState(null, '', '#/song');
   });
 
-  it('opens the sender with the take it sent', () => {
+  it('opens the sender with the take it sent', async () => {
     returnTake('convert', item);
 
     expect(window.location.hash).toBe('#/convert');
     // Marked, so the sender's notice can tell a returned take from a new one.
-    expect(takeHandoff('convert')).toEqual({ ...item, returned: true });
+    expect(await takeHandoff('convert')).toEqual({ ...item, returned: true });
   });
 
-  it('carries the take back into the Studio, which can receive one', () => {
+  it('carries the take back into the Studio, which can receive one', async () => {
     returnTake('studio', item);
 
     expect(window.location.hash).toBe('#/studio');
-    expect(takeHandoff('studio')).toEqual({ ...item, returned: true });
+    expect(await takeHandoff('studio')).toEqual({ ...item, returned: true });
   });
 
-  it('only opens a section that keeps its own work', () => {
+  it('only opens a section that keeps its own work', async () => {
     returnTake('library', item);
 
     expect(window.location.hash).toBe('#/library');
     // Library holds its takes in the database, so nothing needs carrying.
-    for (const { target } of HANDOFF_TARGETS) expect(takeHandoff(target)).toBeNull();
+    for (const { target } of HANDOFF_TARGETS) expect(await takeHandoff(target)).toBeNull();
   });
 });
 
@@ -333,11 +333,11 @@ describe('durable queue', () => {
 
     const seen: HandoffItem[] = [];
     const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    await vi.waitFor(() => expect(seen).toEqual([item]));
     stop();
 
-    expect(seen).toEqual([item]);
     // A duplicate would sit here and arrive again on the next visit.
-    expect(takeHandoff('convert')).toBeNull();
+    expect(await takeHandoff('convert')).toBeNull();
   });
 
   it('hands stored takes over oldest first, one per visit', async () => {
@@ -355,12 +355,12 @@ describe('durable queue', () => {
     expect(names).toEqual(['A take']);
   });
 
-  it('counts how many takes are still waiting for a section', () => {
+  it('counts how many takes are still waiting for a section', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
 
     expect(pendingCount('convert')).toBe(2);
-    takeHandoff('convert');
+    await takeHandoff('convert');
     expect(pendingCount('convert')).toBe(1);
     expect(pendingCount('song')).toBe(0);
   });
@@ -381,6 +381,87 @@ describe('durable queue', () => {
     expect(seen).toEqual([]);
   });
 
+  it('waits for the delete before handing the take over', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const remove = store.remove.bind(store);
+    const releases: Array<() => void> = [];
+    store.remove = vi.fn(
+      (key: string) =>
+        new Promise<void>((resolve, reject) => {
+          releases.push(() => {
+            remove(key).then(resolve, reject);
+          });
+        }),
+    );
+
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The decision this makes: nothing is applied while the row is still on
+    // disk, so a crash cannot leave a shown take queued for the next run.
+    expect(releases).toHaveLength(1);
+    expect(seen).toEqual([]);
+    expect(store.rows.size).toBe(1);
+
+    releases[0]();
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    stop();
+    store.remove = remove;
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('keeps a take queued when its stored row cannot be deleted', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+
+    // No apply: the row survived, and handing the take over would replay it.
+    expect(await takeHandoff('convert')).toBeNull();
+    expect(pendingCount('convert')).toBe(1);
+    expect(store.rows.size).toBe(1);
+
+    // The take was never applied, so a working delete can still hand it over.
+    store.remove = remove;
+    expect(await takeHandoff('convert')).toEqual(item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
+  it('does not show a take whose row survived a failed delete', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stop();
+
+    expect(seen).toEqual([]);
+    // Still waiting, not lost: the section can retry on a later visit.
+    expect(pendingCount('convert')).toBe(1);
+
+    store.remove = remove;
+    clearHandoff();
+    const nextRun: HandoffItem[] = [];
+    const stopNext = subscribeHandoff('convert', (handed) => nextRun.push(handed));
+    await vi.waitFor(() => expect(nextRun).toHaveLength(1));
+    stopNext();
+
+    expect(nextRun[0]).toEqual(item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
   it('keeps only a section’s newest takes on disk', async () => {
     for (let index = 0; index <= HANDOFF_MAX_STORED + 2; index += 1) {
       sendHandoff('convert', { ...item, name: `Take ${index}` });
@@ -396,23 +477,23 @@ describe('durable queue', () => {
     expect(pendingCount('convert')).toBe(HANDOFF_MAX_STORED + 3);
   });
 
-  it('counts the takes waiting for each section', () => {
+  it('counts the takes waiting for each section', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
     sendHandoff('song', { ...item, name: 'Beat take' });
 
     expect(pendingCounts()).toEqual({ convert: 2, song: 1 });
 
-    takeHandoff('convert');
+    await takeHandoff('convert');
     expect(pendingCounts()).toEqual({ convert: 1, song: 1 });
   });
 
-  it('tells the rail after every change, so its count never lags', () => {
+  it('tells the rail after every change, so its count never lags', async () => {
     const seen: Array<Partial<Record<HandoffTarget, number>>> = [];
     const stop = subscribeQueues(() => seen.push(pendingCounts()));
 
     sendHandoff('song', item);
-    takeHandoff('song');
+    await takeHandoff('song');
     stop();
 
     expect(seen).toEqual([{ song: 1 }, {}]);

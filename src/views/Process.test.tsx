@@ -71,16 +71,15 @@ describe('Shape hand-off', () => {
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
 
-  it('announces the arrival as a status and puts focus on the section heading', () => {
+  it('announces the arrival as a status and puts focus on the section heading', async () => {
     sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
 
     render(<Process />);
 
+    const notice = await screen.findByText(/Arrived from another section: First sample/);
     // Announced by the live region, not just drawn: the record dot is the only
     // other status in the view.
-    expect(
-      screen.getByText(/Arrived from another section: First sample/).closest('[role="status"]'),
-    ).not.toBeNull();
+    expect(notice.closest('[role="status"]')).not.toBeNull();
     // The view swapped in under the user, so focus goes with it.
     expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }));
   });
@@ -100,7 +99,7 @@ describe('Shape hand-off', () => {
 
   // Under StrictMode on purpose: the second subscription its extra mount opens
   // must not drain the take still queued behind the one on screen.
-  it('reports the take queued behind the first and takes it in place', () => {
+  it('reports the take queued behind the first and takes it in place', async () => {
     sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
     sendHandoff('process', { name: 'Second sample', blob: new Blob(['b']), duration: 4 });
 
@@ -110,25 +109,27 @@ describe('Shape hand-off', () => {
       </StrictMode>,
     );
 
-    expect(screen.getAllByText('First sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(await screen.findByText('First sample loaded. Shape it, then apply.')).toBeTruthy();
     expect(screen.getByText(/1 more waiting/)).toBeTruthy();
     // Still queued, not swallowed by the remount.
     expect(pendingCount('process')).toBe(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
 
-    expect(screen.getAllByText('Second sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(await screen.findByText('Second sample loaded. Shape it, then apply.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Next take' })).toBeNull();
   });
 
-  it('keeps the queue reachable after the arrival notice is dismissed', () => {
+  it('keeps the queue reachable after the arrival notice is dismissed', async () => {
     sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
     sendHandoff('process', { name: 'Second sample', blob: new Blob(['b']), duration: 4 });
     sendHandoff('process', { name: 'Third sample', blob: new Blob(['c']), duration: 6 });
 
     render(<Process />);
 
-    expect(screen.getByText(/2 more waiting/)).toBeTruthy();
+    expect(await screen.findByText(/2 more waiting/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
 
@@ -136,9 +137,11 @@ describe('Shape hand-off', () => {
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
     expect(screen.getByText(/2 more waiting/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
 
-    expect(screen.getAllByText('Second sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(await screen.findByText('Second sample loaded. Shape it, then apply.')).toBeTruthy();
     expect(screen.getByText(/1 more waiting/)).toBeTruthy();
   });
 });

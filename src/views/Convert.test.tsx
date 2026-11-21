@@ -42,6 +42,8 @@ describe('Convert hand-off', () => {
     );
 
     expect(await screen.findAllByText('Loaded: Chapter one')).toHaveLength(1);
+    // The player only mounts once its effect has made the object URL.
+    await act(async () => {});
     expect(document.querySelectorAll('audio')).toHaveLength(1);
     expect(screen.queryByText(/No source yet/)).toBeNull();
     expect(screen.getAllByText(/Arrived from another section/)).toHaveLength(1);
@@ -53,6 +55,8 @@ describe('Convert hand-off', () => {
         <Convert />
       </StrictMode>,
     );
+    // Let the new mount's store read settle before saying nothing arrived.
+    await act(async () => {});
     expect(screen.queryByText(/Loaded: Chapter one/)).toBeNull();
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });

@@ -40,7 +40,7 @@ describe('SendTakeRow', () => {
     expect(offered).not.toContain(sectionLabel(from));
   });
 
-  it.each(SECTIONS)('stamps the take with %s as its source', (from) => {
+  it.each(SECTIONS)('stamps the take with %s as its source', async (from) => {
     const target = HANDOFF_TARGETS.find((entry) => entry.target !== from);
     if (!target) throw new Error('every section has somewhere to send a take');
 
@@ -61,7 +61,7 @@ describe('SendTakeRow', () => {
       captions: { srt: 'srt', vtt: 'vtt' },
       from,
     });
-    expect(takeHandoff(target.target)).toBeNull();
+    expect(await takeHandoff(target.target)).toBeNull();
   });
 
   it('offers every destination to a take from Library, which receives none', () => {
@@ -76,7 +76,7 @@ describe('SendTakeRow', () => {
     ]);
   });
 
-  it('queues for a section that is not open, and opens it without a history entry', () => {
+  it('queues for a section that is not open, and opens it without a history entry', async () => {
     window.history.replaceState(null, '', '#/convert');
     const depth = window.history.length;
     const heard = vi.fn();
@@ -92,6 +92,6 @@ describe('SendTakeRow', () => {
     // replaceState fires no hashchange of its own, so this is the router's only
     // notice of the new section.
     expect(heard).toHaveBeenCalledTimes(1);
-    expect(takeHandoff('song')?.name).toBe('A take');
+    expect((await takeHandoff('song'))?.name).toBe('A take');
   });
 });

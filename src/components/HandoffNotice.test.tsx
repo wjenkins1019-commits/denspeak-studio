@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('HandoffNotice', () => {
-  it('goes back to the sender with the take, without a history entry', () => {
+  it('goes back to the sender with the take, without a history entry', async () => {
     window.history.replaceState(null, '', '#/transcribe');
     const depth = window.history.length;
 
@@ -29,20 +29,20 @@ describe('HandoffNotice', () => {
     expect(window.history.length).toBe(depth);
     // The sender unmounted when the take left it, so reopening its route alone
     // would land on an empty section. The take has to come back too.
-    expect(takeHandoff('convert')).toEqual({ ...arrived, returned: true });
+    expect(await takeHandoff('convert')).toEqual({ ...arrived, returned: true });
   });
 
-  it('carries the take back into the Studio, which takes one', () => {
+  it('carries the take back into the Studio, which takes one', async () => {
     window.history.replaceState(null, '', '#/process');
 
     render(<HandoffNotice item={{ ...arrived, from: 'studio' }} replaced={false} onKeep={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Back to Studio' }));
 
     expect(window.location.hash).toBe('#/studio');
-    expect(takeHandoff('studio')).toEqual({ ...arrived, from: 'studio', returned: true });
+    expect(await takeHandoff('studio')).toEqual({ ...arrived, from: 'studio', returned: true });
   });
 
-  it('only opens a section that keeps its own work', () => {
+  it('only opens a section that keeps its own work', async () => {
     window.history.replaceState(null, '', '#/song');
 
     render(<HandoffNotice item={{ ...arrived, from: 'library' }} replaced={false} onKeep={() => {}} />);
@@ -51,7 +51,7 @@ describe('HandoffNotice', () => {
     expect(window.location.hash).toBe('#/library');
     // Library holds its takes in the database. A take queued at a section that
     // only ever sends would sit there and land unasked on some later visit.
-    for (const { target } of HANDOFF_TARGETS) expect(takeHandoff(target)).toBeNull();
+    for (const { target } of HANDOFF_TARGETS) expect(await takeHandoff(target)).toBeNull();
   });
 
   it('offers no way back when the route already says this is the sender', () => {

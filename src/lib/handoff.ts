@@ -111,6 +111,8 @@ interface Pending {
   item: HandoffItem;
   /** Row in the durable store, so taking the take deletes it there too. */
   key: string;
+  /** When it was sent, kept so putting a claimed take back does not reorder it. */
+  at: number;
 }
 
 /**
@@ -201,7 +203,7 @@ function hydrate(): Promise<void> {
           if (held.has(row.key)) continue;
 
           const list = byTarget.get(row.target) ?? [];
-          list.unshift({ item: row.item, key: row.key });
+          list.unshift({ item: row.item, key: row.key, at: row.at });
           byTarget.set(row.target, list);
         }
 
@@ -238,15 +240,15 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   }
 
   const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const at = Date.now();
   const queue = pending.get(target);
-  if (queue) queue.push({ item, key });
-  else pending.set(target, [{ item, key }]);
+  if (queue) queue.push({ item, key, at });
+  else pending.set(target, [{ item, key, at }]);
 
   queuesChanged();
 
   // Written, then pruned: a section nobody opens must not collect takes on disk
   // for ever.
-  const at = Date.now();
   write(() => store.put({ key, target, at, item }).then(() => pruneStored()));
 }
 
@@ -283,18 +285,85 @@ export function subscribeHandoff(
   // had one.
   if (options.take === false) return stop;
 
-  const queued = takeHandoff(target);
-  if (queued) listener(queued);
-  else {
-    void hydrate().then(() => {
-      // Unmounted while the store was answering: the next mount takes it.
-      if (!listeners.has(listener)) return;
-      const stored = takeHandoff(target);
-      if (stored) listener(stored);
-    });
-  }
+  // The stored row has to be gone before the take can be shown, so this runs
+  // asynchronously. Hand it to whoever is listening when the delete lands: in
+  // StrictMode the listener above was already replaced by the surviving mount.
+  void (async () => {
+    let claim = await claimStoredTake(target);
+
+    if (claim.status === 'empty') {
+      await hydrate();
+      if (!open.get(target)?.size) return;
+      claim = await claimStoredTake(target);
+    }
+
+    // A failed delete leaves the row on disk; the take stays queued instead of
+    // being shown now and replayed on the next run.
+    if (claim.status !== 'taken') return;
+
+    const current = open.get(target);
+    if (!current || current.size === 0) {
+      // The section closed while the row was being deleted: write it back
+      // rather than lose the take with the view.
+      putBackHandoff(target, claim.entry);
+      return;
+    }
+
+    for (const waiting of [...current]) waiting(claim.entry.item);
+  })();
 
   return stop;
+}
+
+type Claim =
+  | { status: 'taken'; entry: Pending }
+  | { status: 'empty' }
+  | { status: 'failed' };
+
+/**
+ * Claim the oldest queued take and delete its row before it can be handed over.
+ * A failed delete puts the take back: the row may survive, and applying a take
+ * whose row is still there is exactly what brings it back next run.
+ */
+async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
+  const entry = claimQueued(target);
+  if (!entry) return { status: 'empty' };
+
+  try {
+    await store.remove(entry.key);
+    return { status: 'taken', entry };
+  } catch {
+    restoreQueued(target, entry);
+    return { status: 'failed' };
+  }
+}
+
+function claimQueued(target: HandoffTarget): Pending | null {
+  const queue = pending.get(target);
+  const entry = queue?.shift();
+  if (!queue || !entry) return null;
+
+  if (queue.length === 0) pending.delete(target);
+  // Blocks a late hydration from reading the row back while the delete is in
+  // flight.
+  consumed.add(entry.key);
+  queuesChanged();
+  return entry;
+}
+
+function restoreQueued(target: HandoffTarget, entry: Pending): void {
+  consumed.delete(entry.key);
+  const queue = pending.get(target) ?? [];
+  queue.unshift(entry);
+  pending.set(target, queue);
+  queuesChanged();
+}
+
+function putBackHandoff(target: HandoffTarget, entry: Pending): void {
+  restoreQueued(target, entry);
+  // The row went before the listener did; store it again so the take is not
+  // left in memory only.
+  write(() => store.put({ key: entry.key, target, at: entry.at, item: entry.item }));
 }
 
 /**
@@ -414,20 +483,18 @@ export function isHandoffRoute(route: string): route is HandoffTarget {
 }
 
 /**
- * The oldest item queued for this section, if any. Reading it clears it, so the
- * next visit starts with whatever was sent after it, not the take again, and
- * deletes its row so a reload cannot bring it back.
+ * The oldest item queued for this section, if any, after its stored row is
+ * gone. Reading it clears it, so the next visit starts with whatever was sent
+ * after it, and no later run can hand it over again.
+ *
+ * The delete lands first: a crash in the instant between the delete and the
+ * section applying it loses that visit's take, but a take that was applied can
+ * never be replayed. A failed delete leaves the take queued for the next
+ * attempt instead.
  */
-export function takeHandoff(target: HandoffTarget): HandoffItem | null {
-  const queue = pending.get(target);
-  const entry = queue?.shift();
-  if (!queue || !entry) return null;
-
-  if (queue.length === 0) pending.delete(target);
-  consumed.add(entry.key);
-  write(() => store.remove(entry.key));
-  queuesChanged();
-  return entry.item;
+export async function takeHandoff(target: HandoffTarget): Promise<HandoffItem | null> {
+  const claim = await claimStoredTake(target);
+  return claim.status === 'taken' ? claim.entry.item : null;
 }
 
 /** Drop anything queued in memory. Used by tests between cases. */

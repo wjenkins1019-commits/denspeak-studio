@@ -195,7 +195,7 @@ describe('hand-off navigation', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
     // Song took one, so one is left — said by the notice, not the rail.
     expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
-    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+    expect(await screen.findByText(/1 more waiting/)).toBeTruthy();
     // A section that is not on screen keeps its count.
     expect(screen.getByRole('button', { name: /1 take waiting for Shape/ })).toBeTruthy();
 
@@ -210,6 +210,7 @@ describe('hand-off navigation', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
     });
 
+    expect(await screen.findByText(/Arrived from another section: Second take/)).toBeTruthy();
     expect(screen.queryByText(/more waiting/)).toBeNull();
     expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
   });
@@ -227,7 +228,7 @@ describe('hand-off navigation', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Back to Convert' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Back to Convert' }));
     });
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Change a recording' })).toBeTruthy();
