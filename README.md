@@ -10,7 +10,7 @@ minified `app.asar`.
 
 ## Download (Windows)
 
-Grab `Denspeak.Studio.Setup.0.3.1.exe` from the
+Grab `Denspeak.Studio.Setup.0.3.2.exe` from the
 [latest GitHub Release](../../releases/latest) and run it — Windows 10/11 x64.
 The build is unsigned, so SmartScreen may ask for confirmation.
 No account, no upload, no API key. Voices (20–60 MB each) download on first
@@ -21,7 +21,7 @@ GitHub prints beside the asset on the release page (`sha256:…`, under the file
 size). Compare it with:
 
 ```powershell
-Get-FileHash .\Denspeak.Studio.Setup.0.3.1.exe -Algorithm SHA256
+Get-FileHash .\Denspeak.Studio.Setup.0.3.2.exe -Algorithm SHA256
 ```
 
 ## Run it (from source)
@@ -66,13 +66,13 @@ web workers all need it.
 Bump `version` in `package.json`, commit, then push a matching tag:
 
 ```bash
-# e.g. version 0.3.1 -> tag v0.3.1 (tag must match package.json)
-git tag v0.3.1 && git push origin main v0.3.1
+# e.g. version 0.3.2 -> tag v0.3.2 (tag must match package.json)
+git tag v0.3.2 && git push origin main v0.3.2
 ```
 
 CI (`.github/workflows/release.yml`, `windows-latest`) then runs typecheck,
 tests, and `npm run dist:win`, and attaches the unsigned `.exe` to the
-`v0.3.1` GitHub Release automatically. No manual upload needed.
+`v0.3.2` GitHub Release automatically. No manual upload needed.
 
 To try the pipeline without publishing anything, run the workflow manually
 (Actions → Release (Windows) → Run workflow). A manual run is a dry run: it
