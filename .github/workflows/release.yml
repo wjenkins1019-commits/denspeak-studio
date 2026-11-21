@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual runs are dry runs: build and test only, no Release is created.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,6 +33,7 @@ jobs:
         run: npm test
 
       - name: Check tag matches package.json version
+        if: github.event_name == 'push'
         shell: pwsh
         run: |
           $pkg = (Get-Content package.json | ConvertFrom-Json).version
@@ -42,6 +45,7 @@ jobs:
         run: npm run dist:win
 
       - name: Attach installer to release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.exe

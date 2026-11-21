@@ -62,6 +62,11 @@ CI (`.github/workflows/release.yml`, `windows-latest`) then runs typecheck,
 tests, and `npm run dist:win`, and attaches the unsigned `.exe` to the
 `v0.3.1` GitHub Release automatically. No manual upload needed.
 
+To try the pipeline without publishing anything, run the workflow manually
+(Actions → Release (Windows) → Run workflow). A manual run is a dry run: it
+installs, typechecks, tests, and builds the installer, but skips the tag
+version check and does not create or touch any Release.
+
 The window is served from a loopback HTTP origin rather than `file://`, which is
 what gives the renderer a secure context: OPFS model cache, `getUserMedia`, and
 web workers all need it.
