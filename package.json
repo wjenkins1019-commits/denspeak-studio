@@ -1,7 +1,7 @@
 {
   "name": "denspeak-studio",
   "productName": "Denspeak Studio",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "engines": {
     "node": ">=20"
@@ -10,6 +10,7 @@
   "main": "electron/main.js",
   "build": {
     "appId": "com.965media.denspeakstudio",
+    "artifactName": "Denspeak.Studio.Setup.${version}.${ext}",
     "productName": "Denspeak Studio",
     "directories": {
       "output": "release"
