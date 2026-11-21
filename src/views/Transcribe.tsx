@@ -141,7 +141,6 @@ export default function Transcribe() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
-              here="transcribe"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />

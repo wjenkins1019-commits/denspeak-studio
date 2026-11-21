@@ -1,7 +1,15 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearHandoff, sendHandoff, subscribeHandoff, takeHandoff } from './handoff';
+import {
+  clearHandoff,
+  currentSection,
+  returnTake,
+  sendHandoff,
+  subscribeHandoff,
+  takeHandoff,
+} from './handoff';
 
-const item = { name: 'A take', blob: new Blob(['audio']) };
+const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
 
 describe('handoff', () => {
   beforeEach(clearHandoff);
@@ -64,5 +72,42 @@ describe('handoff', () => {
 
     expect(seen).toEqual([]);
     expect(takeHandoff('process')).toEqual(item);
+  });
+});
+
+describe('currentSection', () => {
+  it('reads the section off the route', () => {
+    window.history.replaceState(null, '', '#/process');
+
+    expect(currentSection()).toBe('process');
+  });
+
+  it('answers null for a route that is not a hand-off section', () => {
+    window.history.replaceState(null, '', '#/voices');
+
+    expect(currentSection()).toBeNull();
+  });
+});
+
+describe('returnTake', () => {
+  beforeEach(() => {
+    clearHandoff();
+    window.history.replaceState(null, '', '#/song');
+  });
+
+  it('opens the sender with the take it sent', () => {
+    returnTake('convert', item);
+
+    expect(window.location.hash).toBe('#/convert');
+    expect(takeHandoff('convert')).toEqual(item);
+  });
+
+  it('only opens a section that keeps its own work', () => {
+    returnTake('library', item);
+
+    expect(window.location.hash).toBe('#/library');
+    for (const target of ['convert', 'transcribe', 'process', 'song'] as const) {
+      expect(takeHandoff(target)).toBeNull();
+    }
   });
 });

@@ -22,6 +22,20 @@ export function sectionLabel(section: HandoffSource): string {
   return SECTION_LABELS[section];
 }
 
+/**
+ * The section the app is showing, read off the route rather than passed in, so
+ * nothing can claim to be somewhere it is not. Null when the route names
+ * something that is not a hand-off section.
+ */
+export function currentSection(): HandoffSource | null {
+  if (typeof window === 'undefined') return null;
+
+  const section = window.location.hash.replace(/^#\/?/, '');
+  return Object.prototype.hasOwnProperty.call(SECTION_LABELS, section)
+    ? (section as HandoffSource)
+    : null;
+}
+
 export interface HandoffItem {
   /** Take name without an extension; the receiving section adds its own. */
   name: string;
@@ -114,6 +128,22 @@ export function openSection(section: HandoffSource): void {
 export function sendTake(target: HandoffTarget, item: HandoffItem): void {
   sendHandoff(target, item);
   openSection(target);
+}
+
+/** Whether a section can be sent a take; Studio and Library only ever send one. */
+function isTarget(section: HandoffSource): section is HandoffTarget {
+  return section !== 'studio' && section !== 'library';
+}
+
+/**
+ * Hand `item` back to the section it came from and open it. The hand-off
+ * unmounted that section, so opening its route alone would show it empty; the
+ * take travels with it and is that section's source again. Studio and Library
+ * keep their own work on disk, so for them opening the section is enough.
+ */
+export function returnTake(to: HandoffSource, item: HandoffItem): void {
+  if (isTarget(to)) sendHandoff(to, item);
+  openSection(to);
 }
 
 /**

@@ -212,7 +212,6 @@ export default function Convert() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
-              here="convert"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />

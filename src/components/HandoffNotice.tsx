@@ -1,23 +1,25 @@
-import { openSection, sectionLabel, type HandoffItem, type HandoffTarget } from '../lib/handoff';
+import { currentSection, returnTake, sectionLabel, type HandoffItem } from '../lib/handoff';
 
 /**
  * Reports a take that arrived from another section. When it landed on top of a
- * take that was already there, the button puts that one back. `here` is the
- * section showing the notice, so a take sent to its own section — where there is
- * nowhere to go back to — offers no way back.
+ * take that was already there, the button puts that one back; the notice also
+ * offers the way back to where the take came from, and carries the take with it
+ * so that section is not empty on return.
+ *
+ * Where the notice is comes from the route, not from a prop: a section that
+ * misnamed itself would otherwise offer a "Back" button pointing at itself.
  */
 export function HandoffNotice({
   item,
-  here,
   replaced,
   onKeep,
 }: {
   item: HandoffItem;
-  here: HandoffTarget;
   replaced: boolean;
   onKeep: () => void;
 }) {
-  const back = item.from && item.from !== here ? item.from : null;
+  const here = currentSection();
+  const back = here && item.from && item.from !== here ? item.from : null;
 
   return (
     <div className="row between">
@@ -27,7 +29,7 @@ export function HandoffNotice({
       </small>
       <div className="row">
         {back && (
-          <button className="btn ghost small" onClick={() => openSection(back)}>
+          <button className="btn ghost small" onClick={() => returnTake(back, item)}>
             Back to {sectionLabel(back)}
           </button>
         )}

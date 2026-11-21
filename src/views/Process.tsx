@@ -348,7 +348,6 @@ export default function Process() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
-              here="process"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />

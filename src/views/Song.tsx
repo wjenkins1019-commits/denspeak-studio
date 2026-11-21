@@ -252,7 +252,6 @@ export default function Song() {
           {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
-              here="song"
               replaced={handoff.arrival.before !== null}
               onKeep={handoff.keep}
             />

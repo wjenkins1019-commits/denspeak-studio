@@ -103,5 +103,8 @@ describe('hand-off navigation', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Change a recording' })).toBeTruthy();
     expect(window.location.hash).toBe('#/convert');
+    // The sender unmounted when the take left it, so the way back has to bring
+    // the take with it rather than land on an empty section.
+    expect(await screen.findByText(/^Loaded: A take$/)).toBeTruthy();
   });
 });
