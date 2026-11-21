@@ -55,7 +55,7 @@ import {
 import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
-import { HANDOFF_TARGETS, sendHandoff, type HandoffTarget } from '../lib/handoff';
+import { HANDOFF_TARGETS, sendTake } from '../lib/handoff';
 
 interface StudioProps {
   voiceId: string;
@@ -487,13 +487,6 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
         voiceName: takeVoiceName(),
       },
     ]);
-  }
-
-  /** Hand this take to another section, which picks it up when it mounts. */
-  function sendTakeTo(target: HandoffTarget) {
-    if (!take) return;
-    sendHandoff(target, { name: take.name, blob: take.blob });
-    window.location.hash = `#/${target}`;
   }
 
   /** Latest single narration; the take and A/B below read straight off it. */
@@ -984,7 +977,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
                   <button
                     key={entry.target}
                     className="btn ghost small"
-                    onClick={() => sendTakeTo(entry.target)}
+                    onClick={() => sendTake(entry.target, { name: take.name, blob: take.blob })}
                   >
                     {entry.label}
                   </button>

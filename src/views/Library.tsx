@@ -15,7 +15,7 @@ import { Player } from '../components/Player';
 import { ExportBundle } from '../components/ExportBundle';
 import { BatchMatch } from '../components/BatchMatch';
 import { CaptionSearch } from '../components/CaptionSearch';
-import { HANDOFF_TARGETS, sendHandoff, type HandoffTarget } from '../lib/handoff';
+import { HANDOFF_TARGETS, sendTake } from '../lib/handoff';
 
 export default function Library() {
   const [takes, setTakes] = useState<Take[] | null>(null);
@@ -77,12 +77,6 @@ export default function Library() {
     blobCache.current.clear();
     setOpenId(null);
     await refresh();
-  }
-
-  /** Hand any saved take to a section, which picks it up when it mounts. */
-  function sendTakeTo(take: Take, target: HandoffTarget) {
-    sendHandoff(target, { name: take.name, blob: take.blob });
-    window.location.hash = `#/${target}`;
   }
 
   const missing = (takes ?? []).filter(needsCaptions);
@@ -244,7 +238,7 @@ export default function Library() {
                     <button
                       key={entry.target}
                       className="btn ghost small"
-                      onClick={() => sendTakeTo(take, entry.target)}
+                      onClick={() => sendTake(entry.target, { name: take.name, blob: take.blob })}
                     >
                       {entry.label}
                     </button>

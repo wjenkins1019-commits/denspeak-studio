@@ -26,6 +26,16 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
 }
 
 /**
+ * Queue the take and open its section. The app is hash-routed, so setting the
+ * hash mounts that section, which takes the item on mount. Outside the browser
+ * (unit tests) only the queue is touched.
+ */
+export function sendTake(target: HandoffTarget, item: HandoffItem): void {
+  sendHandoff(target, item);
+  if (typeof window !== 'undefined') window.location.hash = `#/${target}`;
+}
+
+/**
  * The item queued for this section, if any. Reading it clears it, so a later
  * visit starts empty instead of re-loading audio the user already moved on from.
  */
