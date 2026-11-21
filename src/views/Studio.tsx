@@ -55,7 +55,7 @@ import {
 import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
-import { HANDOFF_TARGETS, sendTake } from '../lib/handoff';
+import { SendTakeRow } from '../components/SendTakeRow';
 
 interface StudioProps {
   voiceId: string;
@@ -969,22 +969,7 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             )
           )}
 
-          {take && (
-            <div className="row between">
-              <small className="muted">Send this take to</small>
-              <div className="row">
-                {HANDOFF_TARGETS.map((entry) => (
-                  <button
-                    key={entry.target}
-                    className="btn ghost small"
-                    onClick={() => sendTake(entry.target, { name: take.name, blob: take.blob })}
-                  >
-                    {entry.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          {take && <SendTakeRow name={take.name} blob={take.blob} />}
 
           <div className="hint">
             {isClone ? (

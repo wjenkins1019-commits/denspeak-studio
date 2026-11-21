@@ -15,7 +15,7 @@ import { Player } from '../components/Player';
 import { ExportBundle } from '../components/ExportBundle';
 import { BatchMatch } from '../components/BatchMatch';
 import { CaptionSearch } from '../components/CaptionSearch';
-import { HANDOFF_TARGETS, sendTake } from '../lib/handoff';
+import { SendTakeRow } from '../components/SendTakeRow';
 
 export default function Library() {
   const [takes, setTakes] = useState<Take[] | null>(null);
@@ -231,20 +231,7 @@ export default function Library() {
                   </button>
                 </div>
               </div>
-              <div className="row between">
-                <small className="muted">Send this take to</small>
-                <div className="row">
-                  {HANDOFF_TARGETS.map((entry) => (
-                    <button
-                      key={entry.target}
-                      className="btn ghost small"
-                      onClick={() => sendTake(entry.target, { name: take.name, blob: take.blob })}
-                    >
-                      {entry.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <SendTakeRow name={take.name} blob={take.blob} />
               {openId === take.id && (
                   <Player
                     blob={blobFor(take)}
