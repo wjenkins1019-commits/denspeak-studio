@@ -41,6 +41,25 @@ jobs:
           if ($tag -ne $pkg) { Write-Error "Tag v$tag does not match package.json version $pkg"; exit 1 }
           Write-Host "Version $pkg matches tag."
 
+      - name: Write release notes
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $installer = "Denspeak.Studio.Setup.$version.exe"
+          # Keep this blurb in sync with the Download section of README.md.
+          $notes = @'
+          Windows installer for Denspeak Studio {0} - on-device voice studio (121 Piper voices, no account, no upload, no API key).
+
+          **Download:** `{1}` below (Windows 10/11 x64, ~121 MB). The build is unsigned, so SmartScreen may ask for confirmation. Compare its SHA-256 with the digest GitHub shows beside the asset.
+
+          **First run:** voices download on first use (20-60 MB each) and are cached, so later renders work offline. A microphone is only needed for Convert/Transcribe.
+
+          **From source:** requires Node.js 20+ - `npm install && npm run dev`. The installer below is the build that passed this run's typecheck and test steps.
+          '@
+          # WriteAllText keeps the file BOM-free, which the release body needs.
+          [IO.File]::WriteAllText("$PWD/release-notes.md", ($notes -f $version, $installer))
+
       - name: Build Windows installer
         run: npm run dist:win
 
@@ -50,4 +69,6 @@ jobs:
         with:
           files: release/*.exe
           fail_on_unmatched_files: true
+          # The hand-written blurb leads; GitHub's generated changelog is appended.
+          body_path: release-notes.md
           generate_release_notes: true

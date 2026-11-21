@@ -16,6 +16,14 @@ The build is unsigned, so SmartScreen may ask for confirmation.
 No account, no upload, no API key. Voices (20–60 MB each) download on first
 use and are cached, so later renders work offline.
 
+The installer isn't bit-reproducible, so the reference checksum is the digest
+GitHub prints beside the asset on the release page (`sha256:…`, under the file
+size). Compare it with:
+
+```powershell
+Get-FileHash .\Denspeak.Studio.Setup.0.3.1.exe -Algorithm SHA256
+```
+
 ## Run it (from source)
 
 Prerequisites: Windows 10/11 x64, Node.js 20+ (verified on 26.13.1) with npm,
