@@ -123,9 +123,18 @@ function hydrate(): Promise<void> {
     hydration = store
       .list()
       .then((rows) => {
+        // Keys this run queued itself: every send is written to the store as
+        // well as the queue, so a read of the store can return a row for a take
+        // that is still waiting in memory. Adding it again would hand the same
+        // audio over twice — the second copy on a later visit, unasked.
+        const held = new Set<string>();
+        for (const queue of pending.values()) {
+          for (const entry of queue) held.add(entry.key);
+        }
+
         const byTarget = new Map<HandoffTarget, Pending[]>();
         for (const row of rows) {
-          if (consumed.has(row.key)) continue;
+          if (consumed.has(row.key) || held.has(row.key)) continue;
           const list = byTarget.get(row.target) ?? [];
           list.push({ item: row.item, key: row.key });
           byTarget.set(row.target, list);

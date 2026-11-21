@@ -159,8 +159,11 @@ describe('returnTake', () => {
 /** The durable half of the queue, in memory so a reload can be simulated. */
 class MemoryStore implements HandoffStore {
   readonly rows = new Map<string, HandoffRecord>();
+  /** How many times the queue has been read back, for the duplicate check. */
+  lists = 0;
 
   async list(): Promise<HandoffRecord[]> {
+    this.lists += 1;
     return [...this.rows.values()].sort((a, b) => a.at - b.at);
   }
 
@@ -178,6 +181,7 @@ describe('durable queue', () => {
 
   beforeEach(() => {
     store.rows.clear();
+    store.lists = 0;
     setHandoffStore(store);
     clearHandoff();
   });
@@ -212,6 +216,27 @@ describe('durable queue', () => {
     stop();
 
     expect(store.rows.size).toBe(0);
+  });
+
+  it('does not add a stored row for a take that is still queued in memory', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    // Another section opening reads the store back. Convert's take has only
+    // been sent, not taken, so its row is still there and must be recognised
+    // as the take already waiting in memory.
+    const stopEmpty = subscribeHandoff('process', () => {});
+    await vi.waitFor(() => expect(store.lists).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    stopEmpty();
+
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    stop();
+
+    expect(seen).toEqual([item]);
+    // A duplicate would sit here and arrive again on the next visit.
+    expect(takeHandoff('convert')).toBeNull();
   });
 
   it('hands stored takes over oldest first, one per visit', async () => {
