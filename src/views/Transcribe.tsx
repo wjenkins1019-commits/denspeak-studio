@@ -5,6 +5,7 @@ import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { Player } from '../components/Player';
 import { HandoffNotice } from '../components/HandoffNotice';
+import type { HandoffItem } from '../lib/handoff';
 import { useHandoffTake } from '../lib/useHandoffTake';
 
 interface Source {
@@ -32,12 +33,26 @@ export default function Transcribe() {
   const handoff = useHandoffTake<{ source: Source | null; text: string }>(
     'transcribe',
     source || text ? { source, text } : null,
-    (item) => void load(new File([item.blob], item.name, { type: item.blob.type })),
+    (item) => receive(item),
     (before) => {
       setSource(before.source);
       setText(before.text);
     },
   );
+
+  // A handed take carries its length, so it is not decoded again just to fill in
+  // the duration the way a dropped file has to be.
+  function receive(item: HandoffItem) {
+    setError(null);
+    setText('');
+
+    if (item.duration !== undefined) {
+      setSource({ blob: item.blob, name: item.name, duration: item.duration });
+      return;
+    }
+
+    void load(new File([item.blob], item.name, { type: item.blob.type }));
+  }
 
   async function load(file: File | undefined) {
     if (!file) return;

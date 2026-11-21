@@ -341,7 +341,12 @@ export default function Song() {
           {mix && (
             <div className="stack">
               <Player blob={mix.blob} name={mix.take.name} isSong />
-              <SendTakeRow name={mix.take.name} blob={mix.blob} />
+              <SendTakeRow
+                name={mix.take.name}
+                blob={mix.blob}
+                duration={mix.take.duration}
+                captions={mix.take.captions}
+              />
               <div className="take-list">
                 {mix.result.lines.map((line, index) => (
                   <div className="take-row" key={`${line.text}-${index}`}>

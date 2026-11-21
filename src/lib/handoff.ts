@@ -8,6 +8,16 @@ export interface HandoffItem {
   /** Take name without an extension; the receiving section adds its own. */
   name: string;
   blob: Blob;
+  /**
+   * Length in seconds when the sender knows it, so a receiver can fill in its
+   * own duration instead of decoding the audio again to measure it.
+   */
+  duration?: number;
+  /**
+   * Timed captions when the sender has them. A receiver whose output keeps the
+   * words (Convert, Shape) passes them on again rather than losing them.
+   */
+  captions?: { srt: string; vtt: string };
 }
 
 /** Sections a take can be sent to, with the label their button shows. */

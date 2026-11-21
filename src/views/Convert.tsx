@@ -39,6 +39,8 @@ const PRESETS: Preset[] = [
 interface Source {
   blob: Blob;
   name: string;
+  /** Carried through from a handed take; the shift keeps the words in time. */
+  captions?: { srt: string; vtt: string };
 }
 
 export default function Convert() {
@@ -66,7 +68,7 @@ export default function Convert() {
   const handoff = useHandoffTake<Source>(
     'convert',
     source,
-    (item) => setSource({ blob: item.blob, name: item.name }),
+    (item) => setSource({ blob: item.blob, name: item.name, captions: item.captions }),
     (before) => setSource(before),
   );
 
@@ -167,6 +169,7 @@ export default function Convert() {
         name: `${source.name} (${shapeLabel}${styleLabel})`,
         duration: styled.length / decoded.sampleRate,
         kind: 'convert',
+        captions: source.captions,
         blob,
       });
       setTake(saved);
@@ -319,9 +322,14 @@ export default function Convert() {
         {error && <p className="error">{error}</p>}
         {take && (
           <>
-            <Player blob={take.blob} name={take.name} takeId={take.id} />
+            <Player blob={take.blob} name={take.name} captions={take.captions} takeId={take.id} />
             <p className="status">Converted and saved to your library.</p>
-            <SendTakeRow name={take.name} blob={take.blob} />
+            <SendTakeRow
+              name={take.name}
+              blob={take.blob}
+              duration={take.duration}
+              captions={take.captions}
+            />
           </>
         )}
       </div>

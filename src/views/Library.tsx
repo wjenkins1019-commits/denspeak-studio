@@ -231,7 +231,12 @@ export default function Library() {
                   </button>
                 </div>
               </div>
-              <SendTakeRow name={take.name} blob={take.blob} />
+              <SendTakeRow
+                name={take.name}
+                blob={take.blob}
+                duration={take.duration}
+                captions={take.captions}
+              />
               {openId === take.id && (
                   <Player
                     blob={blobFor(take)}

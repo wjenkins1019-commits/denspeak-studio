@@ -36,6 +36,8 @@ const BAND_TYPES: Array<{ value: EqBand['type']; label: string }> = [
 interface Source {
   blob: Blob;
   label: string;
+  /** Carried through from a handed take; the EQ keeps the words in time. */
+  captions?: { srt: string; vtt: string };
 }
 
 interface Result {
@@ -79,8 +81,8 @@ export default function Process() {
   const handoff = useHandoffTake<Source>(
     'process',
     source,
-    (item) => loadSource(item.blob, item.name),
-    (before) => loadSource(before.blob, before.label),
+    (item) => loadSource(item.blob, item.name, item.captions),
+    (before) => loadSource(before.blob, before.label, before.captions),
   );
 
   const style = useMemo(() => styleById(styleId), [styleId]);
@@ -133,8 +135,8 @@ export default function Process() {
     setResult(null);
   }
 
-  function loadSource(blob: Blob, label: string) {
-    setSource({ blob, label });
+  function loadSource(blob: Blob, label: string, captions?: { srt: string; vtt: string }) {
+    setSource({ blob, label, captions });
     setAnalysis(null);
     setResult(null);
     setError(null);
@@ -172,7 +174,13 @@ export default function Process() {
       const name = `${voice?.name ?? bankVoice} matched to ${source?.label ?? 'sample'}`;
 
       setResult({ blob, label: name, seconds });
-      await saveTake({ name, duration: seconds, kind: 'processed', blob });
+      await saveTake({
+        name,
+        duration: seconds,
+        kind: 'processed',
+        captions: source?.captions,
+        blob,
+      });
       setStatus(`Matched and saved (${seconds.toFixed(1)} s).`);
     } catch (matchError) {
       setStatus('');
@@ -263,7 +271,13 @@ export default function Process() {
       const seconds = processed.length / decoded.sampleRate;
 
       setResult({ blob, label: name, seconds });
-      await saveTake({ name, duration: seconds, kind: 'processed', blob });
+      await saveTake({
+        name,
+        duration: seconds,
+        kind: 'processed',
+        captions: source?.captions,
+        blob,
+      });
       setStatus(`Processed ${seconds.toFixed(1)} s and saved it to your library.`);
     } catch (processError) {
       setStatus('');
@@ -529,8 +543,15 @@ export default function Process() {
                 shaped={result.blob}
                 rawLabel="Raw"
                 shapedLabel="Shaped"
+                captions={source.captions}
+                captionsName={source.label}
               />
-              <SendTakeRow name={result.label} blob={result.blob} />
+              <SendTakeRow
+                name={result.label}
+                blob={result.blob}
+                duration={result.seconds}
+                captions={source.captions}
+              />
             </div>
           )}
         </div>

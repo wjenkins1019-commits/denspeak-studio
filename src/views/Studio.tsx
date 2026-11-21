@@ -969,7 +969,14 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             )
           )}
 
-          {take && <SendTakeRow name={take.name} blob={take.blob} />}
+          {take && (
+            <SendTakeRow
+              name={take.name}
+              blob={take.blob}
+              duration={take.duration}
+              captions={take.captions}
+            />
+          )}
 
           <div className="hint">
             {isClone ? (
