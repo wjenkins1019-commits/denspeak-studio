@@ -49,6 +49,19 @@ npm run typecheck  # tsc --noEmit
 npm test           # vitest: EQ curves, ZIP writer, filenames, WAV/MP3
 ```
 
+## Releasing
+
+Bump `version` in `package.json`, commit, then push a matching tag:
+
+```bash
+# e.g. version 0.3.1 -> tag v0.3.1 (tag must match package.json)
+git tag v0.3.1 && git push origin main v0.3.1
+```
+
+CI (`.github/workflows/release.yml`, `windows-latest`) then runs typecheck,
+tests, and `npm run dist:win`, and attaches the unsigned `.exe` to the
+`v0.3.1` GitHub Release automatically. No manual upload needed.
+
 The window is served from a loopback HTTP origin rather than `file://`, which is
 what gives the renderer a secure context: OPFS model cache, `getUserMedia`, and
 web workers all need it.
