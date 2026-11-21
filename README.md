@@ -10,19 +10,27 @@ minified `app.asar`.
 
 ## Download (Windows)
 
-Grab `Denspeak.Studio.Setup.0.3.2.exe` from the
+Grab `Denspeak.Studio.Setup.<version>.exe` from the
 [latest GitHub Release](../../releases/latest) and run it — Windows 10/11 x64.
 The build is unsigned, so SmartScreen may ask for confirmation.
 No account, no upload, no API key. Voices (20–60 MB each) download on first
 use and are cached, so later renders work offline.
 
-The installer isn't bit-reproducible, so the reference checksum is the digest
-GitHub prints beside the asset on the release page (`sha256:…`, under the file
-size). Compare it with:
+Every release publishes `Denspeak.Studio.Setup.<version>.exe.sha256` beside the
+installer, computed by the release workflow from the file it built. Download
+both and check them together:
+
+```bash
+sha256sum -c Denspeak.Studio.Setup.<version>.exe.sha256   # Git Bash / WSL
+```
 
 ```powershell
-Get-FileHash .\Denspeak.Studio.Setup.0.3.2.exe -Algorithm SHA256
+Get-FileHash .\Denspeak.Studio.Setup.<version>.exe -Algorithm SHA256
+# the printed hash is the first field of the .sha256 file
 ```
+
+The installer isn't bit-reproducible, so a hash only matches the release it was
+published with; GitHub also shows it on the asset (`sha256:…`, under the size).
 
 ## Run it (from source)
 
@@ -63,16 +71,21 @@ web workers all need it.
 
 ## Releasing
 
-Bump `version` in `package.json`, commit, then push a matching tag:
+Bump `version` in `package.json` and both `version` fields in
+`package-lock.json`, commit, then push a matching tag:
 
 ```bash
-# e.g. version 0.3.2 -> tag v0.3.2 (tag must match package.json)
-git tag v0.3.2 && git push origin main v0.3.2
+# the tag must match the version in package.json
+git tag v<version> && git push origin main v<version>
 ```
 
 CI (`.github/workflows/release.yml`, `windows-latest`) then runs typecheck,
-tests, and `npm run dist:win`, and attaches the unsigned `.exe` to the
-`v0.3.2` GitHub Release automatically. No manual upload needed.
+tests, and `npm run dist:win`, and attaches the unsigned `.exe` plus a matching
+`.sha256` to the GitHub Release automatically. No manual upload needed. The
+release body is generated as well: `scripts/release-notes.mjs` lists the commit
+subjects since the previous tag under "What changed since v...", sizes the file
+from the artifact, and appends the compare link - so there is no hand-written
+blurb to patch afterwards.
 
 To try the pipeline without publishing anything, run the workflow manually
 (Actions → Release (Windows) → Run workflow). A manual run is a dry run: it
