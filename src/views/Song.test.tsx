@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 // Receiver wiring for the hand-off: a beat sent while Song is open must land
-// without a remount, and the beat it replaced must stay one click away. Decoding
-// and tempo detection are stubbed so the arrival resolves without real audio.
+// without a remount, and the beat it replaced must stay one click away.
+// Rendered under StrictMode, as the app is: delivery rests on a subscription
+// effect, so a take must still land exactly once when React mounts, cleans up
+// and mounts again. Decoding and tempo detection are stubbed so the arrival
+// resolves without real audio.
+import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Song from './Song';
@@ -51,19 +55,27 @@ afterEach(() => {
 
 describe('Song hand-off', () => {
   it('takes a second beat sent while it is open, and hands the first back', async () => {
-    render(<Song />);
+    render(
+      <StrictMode>
+        <Song />
+      </StrictMode>,
+    );
 
     await act(async () => {
       sendHandoff('song', { name: 'First beat', blob: new Blob(['a']), duration: 2 });
     });
     // The name shows twice: once beside the file input, once on the player.
     expect(await screen.findAllByText('First beat')).toHaveLength(2);
+    expect(screen.getAllByText(/Arrived from another section/)).toHaveLength(1);
+    expect(document.querySelectorAll('audio')).toHaveLength(1);
 
     await act(async () => {
       sendHandoff('song', { name: 'Second beat', blob: new Blob(['b']), duration: 4 });
     });
     expect(await screen.findAllByText('Second beat')).toHaveLength(2);
+    expect(screen.getAllByText(/Arrived from another section/)).toHaveLength(1);
     expect(screen.getByText(/it replaced the take you had/)).toBeTruthy();
+    expect(document.querySelectorAll('audio')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Keep the previous take' }));
 
