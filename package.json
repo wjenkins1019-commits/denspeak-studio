@@ -3,6 +3,9 @@
   "productName": "Denspeak Studio",
   "version": "0.3.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "description": "Denspeak Studio — on-device voice studio, rebuilt as editable source.",
   "main": "electron/main.js",
   "build": {

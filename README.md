@@ -6,9 +6,22 @@ pitch/formants of a recording. Everything renders locally with ONNX Runtime
 
 This is a source rebuild of the shipped `Chatter Box 0.2.0` Electron app (the
 app was later renamed Denspeak Studio). The original was only available as a
-minified `app.asar`; it is kept unmodified in `legacy-build/` for reference.
+minified `app.asar`.
 
-## Run it
+## Download (Windows)
+
+Grab `Denspeak Studio Setup 0.3.0.exe` from
+[GitHub Releases](../../releases/tag/v0.3.0) and run it — Windows 10/11 x64.
+The build is unsigned, so SmartScreen may ask for confirmation.
+No account, no upload, no API key. Voices (20–60 MB each) download on first
+use and are cached, so later renders work offline.
+
+## Run it (from source)
+
+Prerequisites: Windows 10/11 x64, Node.js 20+ (verified on 26.13.1) with npm,
+about 500 MB free for `node_modules`, plus room for voice models (20–60 MB
+each, cached on first use). A microphone is only needed for the Convert and
+Transcribe views.
 
 ```bash
 npm install       # first time only
@@ -19,7 +32,7 @@ Other scripts:
 
 ```bash
 npm run build      # production bundle into dist/
-npm run dist:win   # Windows installer (NSIS) into release/, never published
+npm run dist:win   # Windows installer (NSIS) into release/, published as GitHub Release v0.3.0
 # Optional signing: put the Azure Trusted Signing endpoint, account,
 # profile, and publisher in build.win.azureSignOptions in package.json
 # (identifiers, safe to commit), then set AZURE_TENANT_ID /
@@ -64,7 +77,7 @@ web workers all need it.
 | `src/lib/export.ts` | WAV export and the stored ZIP bundle of the library |
 | `src/lib/library.ts` | IndexedDB take store |
 | `src/voices.ts` | Generated voice catalog (121 models) |
-| `legacy-build/` | The original compiled app, untouched, for diffing |
+| `legacy-build/` | Local-only copy of the original compiled app, untouched, for diffing (not in git; the maintainer keeps it out of the repo) |
 
 ## Notes
 
@@ -92,6 +105,6 @@ web workers all need it.
   UI. Library ZIP bundles stay WAV masters.
 - The UI is dark by default; Settings → Appearance switches to a light theme,
   which is remembered on this machine.
-- `npm run gen:voices` regenerates `src/voices.ts` from `legacy-build/`.
+- `npm run gen:voices` regenerates `src/voices.ts` from a local `legacy-build/` copy (not in git; fresh clones don't have it, and you don't need it to build or run).
 - `npm run icons` regenerates `public/icons/` and `assets/icon.ico` from
   `assets/icon.svg` (needs `sharp`).
