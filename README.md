@@ -10,7 +10,7 @@ minified `app.asar`.
 
 ## Download (Windows)
 
-Grab `Denspeak Studio Setup 0.3.0.exe` from
+Grab `Denspeak.Studio.Setup.0.3.0.exe` from
 [GitHub Releases](../../releases/tag/v0.3.0) and run it — Windows 10/11 x64.
 The build is unsigned, so SmartScreen may ask for confirmation.
 No account, no upload, no API key. Voices (20–60 MB each) download on first
