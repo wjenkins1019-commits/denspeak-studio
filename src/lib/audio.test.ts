@@ -69,6 +69,58 @@ describe('timeStretch', () => {
     expect(ratio).toBeGreaterThan(0.97);
     expect(ratio).toBeLessThan(1.03);
   });
+
+  it('finds a low pitch at 48 kHz, not a 22.05 kHz sample count', () => {
+    const rate = 48_000;
+    // 70 Hz is a 686-sample period here. A lag search of 40..400 samples is
+    // 550..55 Hz at 22.05 kHz, but 1200..120 Hz at this rate, so the period is
+    // not in range at all; and a fixed 256-sample reach is a third of a period.
+    // Both figures are durations for this reason, and this is the case that
+    // shows it: sized in absolute samples the alignment lands on a sub-multiple
+    // of the period and the output stops repeating at 70 Hz.
+    const source = new Float32Array(Math.round(rate * 1.2));
+    for (let i = 0; i < source.length; i += 1) {
+      const t = i / rate;
+      source[i] = 0.4 * Math.sin(2 * Math.PI * 70 * t) + 0.2 * Math.sin(2 * Math.PI * 140 * t + 0.7);
+    }
+
+    const out = timeStretch(source, 1 / 0.9, rate);
+    expect(out).toHaveLength(Math.round(source.length * (1 / 0.9)));
+
+    const from = Math.floor(rate / 2);
+    const span = Math.floor(rate / 5);
+    const rms = (samples: Float32Array) => {
+      let sum = 0;
+      for (let i = from; i < from + span; i += 1) sum += samples[i] * samples[i];
+      return Math.sqrt(sum / span);
+    };
+    const ratio = rms(out) / rms(source);
+    expect(ratio).toBeGreaterThan(0.97);
+    expect(ratio).toBeLessThan(1.03);
+
+    // The output must still repeat once per 686 samples: a half-period or
+    // third-period alignment shows up as the autocorrelation peaking off 686.
+    let bestLag = 0;
+    let best = -Infinity;
+    for (let lag = 560; lag <= 820; lag += 1) {
+      let dot = 0;
+      let left = 0;
+      let right = 0;
+      for (let i = from; i + lag < from + span; i += 2) {
+        dot += out[i] * out[i + lag];
+        left += out[i] * out[i];
+        right += out[i + lag] * out[i + lag];
+      }
+      const score = dot / Math.sqrt(left * right + 1e-9);
+      if (score > best) {
+        best = score;
+        bestLag = lag;
+      }
+    }
+    expect(bestLag).toBeGreaterThan(660);
+    expect(bestLag).toBeLessThan(730);
+    expect(best).toBeGreaterThan(0.9);
+  });
 });
 
 describe('resample', () => {

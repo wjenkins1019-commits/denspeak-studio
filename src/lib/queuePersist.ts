@@ -23,7 +23,7 @@ import type { ParsedBook } from './ebook';
  * domain, so a take rendered at a speed other than 1 sounds different.
  * Version 4: that stretch searches wide enough for low male voices.
  */
-export const RENDER_CHAIN_VERSION = 4;
+export const RENDER_CHAIN_VERSION = 5;
 
 /** FNV-1a over chain version + text + settings + voice: one exact render. */
 export function jobFingerprint(input: {

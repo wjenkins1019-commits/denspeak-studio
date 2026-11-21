@@ -22,6 +22,17 @@ const MIN_SEARCH_SECONDS = 48 / REFERENCE_RATE;
 const MAX_SEARCH_SECONDS = 256 / REFERENCE_RATE;
 /** Correlation window for scoring a candidate frame: ~1.5 pitch periods. */
 const OVERLAP_SECONDS = 320 / REFERENCE_RATE;
+/**
+ * How far below the best score a candidate may sit and still count as a tie.
+ * Ties go to the frame nearest where the sound would have continued, so this is
+ * what stops a match from wandering. 0.2% was too tight once the window became
+ * a full pitch period instead of a fraction of one: the best match could sit a
+ * period away on voiced material and drag the fricatives in it. On 48 kHz speech
+ * 2% measured better sibilance in 8 of 9 cells (worst cells -8.4 -> -0.4 dB,
+ * -6.9 -> +1.4 dB against the fixed-count build) at the same level and with the
+ * gaps no louder.
+ */
+const TIE_BREAK_MARGIN = 0.02;
 /** Samples compared when scoring a candidate frame: a couple of pitch periods. */
 const WSOLA_OVERLAP = 320;
 /**
@@ -257,10 +268,10 @@ function bestCandidate(
 
   // On voiced material every whole-period offset correlates about equally well,
   // so taking the highest score would let a phrase part slide up to half a
-  // period away and drag the fricatives with it. Stay within a hair of the best
-  // score, then prefer the candidate nearest the nominal read position: the
+  // period away and drag the fricatives with it. Stay within the margin of the
+  // best score, then prefer the candidate nearest the nominal read position: the
   // waveform still continues, and everything else stays where it was.
-  const margin = Math.abs(best) * 0.002;
+  const margin = Math.abs(best) * TIE_BREAK_MARGIN;
   let choice = candidates[0];
   let nearest = Infinity;
   for (let index = 0; index < candidates.length; index += 1) {
