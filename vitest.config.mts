@@ -6,6 +6,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Release-script tests live beside the scripts they guard, so `npm test`
+    // covers them in the workflow's test step too.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.mjs'],
   },
 });
