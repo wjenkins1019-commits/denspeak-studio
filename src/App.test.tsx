@@ -85,7 +85,7 @@ describe('hand-off navigation', () => {
     expect(screen.queryByRole('heading', { level: 1, name: 'Change a recording' })).toBeNull();
   });
 
-  it('counts the takes waiting for a section that is not open', async () => {
+  it('opens what is waiting for a section from its rail count, without taking it', async () => {
     render(
       <StrictMode>
         <App />
@@ -98,20 +98,75 @@ describe('hand-off navigation', () => {
     expect(screen.queryByRole('button', { name: /take waiting/ })).toBeNull();
 
     await act(async () => {
-      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', {
+        name: 'A take',
+        blob: new Blob(['a']),
+        duration: 1,
+        from: 'convert',
+      });
     });
 
     // The rail says where it is waiting, without opening Song to find out.
-    const song = screen.getByRole('button', { name: /1 take waiting/ });
-    expect(song.textContent).toContain('Song');
+    const count = screen.getByRole('button', { name: /1 take waiting for Song/ });
 
     await act(async () => {
-      fireEvent.click(song);
+      fireEvent.click(count);
+    });
+
+    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    expect(panel.textContent).toContain('A take');
+    expect(panel.textContent).toContain('from Convert');
+    // Reviewing is not taking: the queue and the route are both untouched.
+    expect(screen.getByRole('button', { name: /1 take waiting for Song/ })).toBeTruthy();
+    expect(window.location.hash).toBe('#/convert');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Song' }));
     });
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
     // Taken now, so there is nothing left to count.
-    expect(screen.queryByRole('button', { name: /take waiting/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /take waiting for Song/ })).toBeNull();
+  });
+
+  it('discards queued takes one at a time, then clears the rest', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
+    });
+
+    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    // Everything a clear would throw away is named before it is offered.
+    expect(panel.textContent).toContain('First take');
+    expect(panel.textContent).toContain('Second take');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard First take' }));
+    });
+
+    expect(panel.textContent).not.toContain('First take');
+    expect(panel.textContent).toContain('Second take');
+    expect(screen.getByRole('button', { name: /1 take waiting for Song/ })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear all 1' }));
+    });
+
+    expect(screen.getByText('Nothing queued now.')).toBeTruthy();
+    // The count that opened the panel is gone with the queue.
+    expect(screen.queryByRole('button', { name: /take waiting for Song/ })).toBeNull();
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {

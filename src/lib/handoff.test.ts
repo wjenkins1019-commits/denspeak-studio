@@ -14,6 +14,9 @@ import {
   pendingCount,
   pendingCounts,
   subscribeQueues,
+  queuedTakes,
+  discardHandoff,
+  discardHandoffQueue,
   HANDOFF_MAX_AGE_MS,
   HANDOFF_MAX_STORED,
   HANDOFF_TARGETS,
@@ -128,6 +131,41 @@ describe('handoff', () => {
     expect(takeHandoff('song')).toBeNull();
   });
 
+  it('lists a section’s queue oldest first without taking anything', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take', duration: 9, from: 'studio' });
+
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['A take', 'Second take']);
+    expect(queuedTakes('convert')[1]).toMatchObject({ duration: 9, from: 'studio' });
+    // Looking is not taking: both are still queued for a later visit.
+    expect(pendingCount('convert')).toBe(2);
+  });
+
+  it('discards one queued take and leaves the rest', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    const [oldest] = queuedTakes('convert');
+
+    expect(discardHandoff('convert', oldest.key)).toBe(true);
+
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['Second take']);
+    expect(pendingCount('convert')).toBe(1);
+    // A key that is gone is not silently discarded twice.
+    expect(discardHandoff('convert', oldest.key)).toBe(false);
+    expect(takeHandoff('convert')).toMatchObject({ name: 'Second take' });
+  });
+
+  it('clears a section’s queue without touching another section', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    sendHandoff('song', { ...item, name: 'Beat take' });
+
+    expect(discardHandoffQueue('convert')).toBe(2);
+    expect(pendingCount('convert')).toBe(0);
+    expect(pendingCount('song')).toBe(1);
+    expect(discardHandoffQueue('convert')).toBe(0);
+  });
+
   it('keeps a section out of another section’s take', () => {
     const seen: string[] = [];
     const stop = subscribeHandoff('convert', (handed) => seen.push(handed.name));
@@ -234,6 +272,38 @@ describe('durable queue', () => {
     expect(seen[0]).toEqual(item);
     // Taken once, so the next load starts empty instead of replaying it.
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
+  it('does not bring back a take that was discarded', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const [queued] = queuedTakes('convert');
+    discardHandoff('convert', queued.key);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+
+    // A reload starts with nothing, not with the discarded audio.
+    clearHandoff();
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    await hydrateHandoff();
+    stop();
+
+    expect(seen).toEqual([]);
+  });
+
+  it('does not bring back a queue that was cleared', async () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+
+    expect(discardHandoffQueue('convert')).toBe(2);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+
+    clearHandoff();
+    await hydrateHandoff();
+
+    expect(queuedTakes('convert')).toEqual([]);
   });
 
   it('stores nothing for a section that is open, which takes the take directly', async () => {

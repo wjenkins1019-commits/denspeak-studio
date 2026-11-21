@@ -341,6 +341,56 @@ export function pendingCount(target: HandoffTarget): number {
   return pending.get(target)?.length ?? 0;
 }
 
+/** A take still queued for a section, for showing it before it is thrown away. */
+export interface QueuedTake {
+  /** Row id, so one take can be discarded without taking the one in front. */
+  key: string;
+  name: string;
+  from?: HandoffSource;
+  duration?: number;
+}
+
+/** What is queued for a section, oldest first. Reading it takes nothing. */
+export function queuedTakes(target: HandoffTarget): QueuedTake[] {
+  return (pending.get(target) ?? []).map(({ key, item }) => ({
+    key,
+    name: item.name,
+    from: item.from,
+    duration: item.duration,
+  }));
+}
+
+/**
+ * Throw away one queued take without taking it. Only ever user-initiated: a
+ * take nobody asked to drop stays queued, as it always has.
+ */
+export function discardHandoff(target: HandoffTarget, key: string): boolean {
+  const queue = pending.get(target);
+  const index = queue ? queue.findIndex((entry) => entry.key === key) : -1;
+  if (!queue || index < 0) return false;
+
+  const [entry] = queue.splice(index, 1);
+  if (queue.length === 0) pending.delete(target);
+  consumed.add(entry.key);
+  write(() => store.remove(entry.key));
+  queuesChanged();
+  return true;
+}
+
+/** Throw away everything queued for a section; returns how many went. */
+export function discardHandoffQueue(target: HandoffTarget): number {
+  const queue = pending.get(target);
+  if (!queue || queue.length === 0) return 0;
+
+  pending.delete(target);
+  for (const entry of queue) {
+    consumed.add(entry.key);
+    write(() => store.remove(entry.key));
+  }
+  queuesChanged();
+  return queue.length;
+}
+
 /** How many takes are waiting for each section; a section with none is left out. */
 export function pendingCounts(): Partial<Record<HandoffTarget, number>> {
   const counts: Partial<Record<HandoffTarget, number>> = {};

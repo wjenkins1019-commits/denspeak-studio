@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_THEME, DEFAULT_VOICE, SETTING_KEYS, useSetting, type Theme } from './lib/settings';
 import { cancelJob, getActiveJob, useRenderQueue } from './lib/renderQueue';
-import { isHandoffRoute } from './lib/handoff';
+import {
+  discardHandoff,
+  discardHandoffQueue,
+  isHandoffRoute,
+  queuedTakes,
+  type HandoffTarget,
+} from './lib/handoff';
 import { usePendingCounts } from './lib/useHandoffTake';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
+import { QueuePanel } from './components/QueuePanel';
 import Studio from './views/Studio';
 import Convert from './views/Convert';
 import Transcribe from './views/Transcribe';
@@ -51,6 +58,9 @@ export default function App() {
   const [voiceId, setVoiceId] = useSetting<string>(SETTING_KEYS.voice, DEFAULT_VOICE);
   const [speed, setSpeed] = useSetting<number>(SETTING_KEYS.speed, 1);
   const [theme, setTheme] = useSetting<Theme>(SETTING_KEYS.theme, DEFAULT_THEME);
+  // The section whose queue the rail count opened, if any.
+  const [queuePanel, setQueuePanel] = useState<HandoffTarget | null>(null);
+  const queueReturn = useRef<HTMLButtonElement | null>(null);
 
   // index.html sets the same attribute before the first paint, so a light UI
   // does not flash dark on load; this keeps it in step after a change.
@@ -77,6 +87,41 @@ export default function App() {
     [navigate, setVoiceId],
   );
 
+  const openQueue = useCallback((target: HandoffTarget, trigger: HTMLButtonElement) => {
+    queueReturn.current = trigger;
+    setQueuePanel(target);
+  }, []);
+
+  const closeQueue = useCallback(() => {
+    const target = queuePanel;
+    const trigger = queueReturn.current;
+    setQueuePanel(null);
+    // Back to the count that opened it; clearing a queue removes that control,
+    // so the section's own rail entry is the fallback.
+    if (trigger?.isConnected) trigger.focus();
+    else if (target) {
+      document.querySelector<HTMLButtonElement>(`.nav-item[data-section="${target}"]`)?.focus();
+    }
+  }, [queuePanel]);
+
+  const discardQueued = useCallback(
+    (key: string) => {
+      if (queuePanel) discardHandoff(queuePanel, key);
+    },
+    [queuePanel],
+  );
+
+  const clearQueued = useCallback(() => {
+    if (queuePanel) discardHandoffQueue(queuePanel);
+  }, [queuePanel]);
+
+  const openQueuedSection = useCallback(() => {
+    if (!queuePanel) return;
+    const target = queuePanel;
+    closeQueue();
+    navigate(target);
+  }, [closeQueue, navigate, queuePanel]);
+
   const voice = VOICES_BY_ID.get(voiceId);
 
   return (
@@ -94,29 +139,33 @@ export default function App() {
 
         <nav className="nav">
           {NAV.map((item) => {
-            const waiting = isHandoffRoute(item.id) ? (waitingBySection[item.id] ?? 0) : 0;
+            const target = isHandoffRoute(item.id) ? item.id : null;
+            const waiting = target ? (waitingBySection[target] ?? 0) : 0;
+            const takes = waiting === 1 ? '1 take' : `${waiting} takes`;
 
             return (
-              <button
-                key={item.id}
-                className={route === item.id ? 'nav-item active' : 'nav-item'}
-                onClick={() => navigate(item.id)}
-              >
-                <span className="nav-label">
-                  {item.label}
-                  {waiting > 0 && (
-                    <>
-                      <span className="nav-count" aria-hidden="true">
-                        {waiting}
-                      </span>
-                      <span className="sr-only">
-                        , {waiting === 1 ? '1 take' : `${waiting} takes`} waiting
-                      </span>
-                    </>
-                  )}
-                </span>
-                <small>{item.hint}</small>
-              </button>
+              <div className="nav-item-wrap" key={item.id}>
+                <button
+                  className={route === item.id ? 'nav-item active' : 'nav-item'}
+                  data-section={item.id}
+                  onClick={() => navigate(item.id)}
+                >
+                  <span className="nav-label">{item.label}</span>
+                  <small>{item.hint}</small>
+                </button>
+                {target && waiting > 0 && (
+                  <button
+                    className="nav-count"
+                    aria-haspopup="dialog"
+                    aria-expanded={queuePanel === target}
+                    aria-label={`${takes} waiting for ${item.label}. Review the queue`}
+                    title={`Review the ${takes} waiting for ${item.label}`}
+                    onClick={(event) => openQueue(target, event.currentTarget)}
+                  >
+                    {waiting}
+                  </button>
+                )}
+              </div>
             );
           })}
         </nav>
@@ -173,6 +222,17 @@ export default function App() {
           />
         )}
       </main>
+
+      {queuePanel && (
+        <QueuePanel
+          label={NAV.find((item) => item.id === queuePanel)?.label ?? 'this section'}
+          takes={queuedTakes(queuePanel)}
+          onDiscard={discardQueued}
+          onClear={clearQueued}
+          onOpen={openQueuedSection}
+          onClose={closeQueue}
+        />
+      )}
     </div>
   );
 }

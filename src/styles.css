@@ -233,6 +233,12 @@ small {
   color: var(--accent-2);
 }
 
+/* The count sits over the row's right edge, so the row itself still opens the
+   section while the count opens its queue. */
+.nav-item-wrap {
+  position: relative;
+}
+
 /* A take is queued for this section and nobody has opened it yet. */
 .nav-label {
   display: flex;
@@ -242,20 +248,36 @@ small {
   align-self: stretch;
   justify-content: space-between;
   gap: 8px;
+  padding-right: 30px;
 }
 
 .nav-count {
+  position: absolute;
+  top: 11px;
+  right: 14px;
   display: inline-grid;
   place-items: center;
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
+  border: 0;
   border-radius: 999px;
   background: var(--accent);
   color: var(--primary-text);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+  cursor: pointer;
+}
+
+.nav-count:hover {
+  filter: brightness(1.08);
+}
+
+.nav-count:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
 }
 
 /* Light UI darkens the accent, so the count keeps white text to stay legible. */
@@ -274,6 +296,93 @@ small {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---------- hand-off queue ---------- */
+
+/* Explicitly discarding a queued take, or clearing a section's queue, from the
+   rail's count. The list comes before the clear button: you see what goes. */
+.queue-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 8, 20, 0.55);
+}
+
+.queue-panel {
+  width: min(520px, 100%);
+  max-height: min(70vh, 620px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  /* Opaque on purpose: this sits over the rail and the page, and a translucent
+     surface let both read through the list you are about to clear. */
+  background: var(--bg-2);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+}
+
+.queue-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.queue-head h2 {
+  margin: 2px 0 4px;
+  font-size: 19px;
+}
+
+.queue-head h2:focus {
+  outline: none;
+}
+
+.queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line-soft);
+}
+
+.queue-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.queue-take {
+  min-width: 0;
+}
+
+.queue-take strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.queue-take small {
+  display: block;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 
 .rail-foot {

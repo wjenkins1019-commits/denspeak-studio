@@ -76,6 +76,11 @@ export function useHandoffTake<S>(
 
   useEffect(() => subscribeHandoff(target, deliver, { take: !landed.current }), [target]);
 
+  // A queued take can be discarded from the rail while this section is open;
+  // keep "N more waiting" honest rather than leaving a count for audio that is
+  // already gone.
+  useEffect(() => subscribeQueues(() => setWaiting(pendingCount(target))), [target]);
+
   return {
     arrival,
     /** How many takes are still waiting behind the one on screen. */
