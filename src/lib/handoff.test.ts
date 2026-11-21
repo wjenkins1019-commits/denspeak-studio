@@ -87,6 +87,27 @@ describe('handoff', () => {
     expect(takeHandoff('convert')).toBeNull();
   });
 
+  it('joins without taking when asked to, and still receives a take sent while open', () => {
+    sendHandoff('song', item);
+    const seen: string[] = [];
+
+    const stop = subscribeHandoff('song', (handed) => seen.push(handed.name), { take: false });
+
+    // Nothing queued was handed over just by joining.
+    expect(seen).toEqual([]);
+    expect(pendingCount('song')).toBe(1);
+
+    // A take sent to the open section still arrives, without waiting for a
+    // remount.
+    sendHandoff('song', { ...item, name: 'Second take' });
+    stop();
+
+    expect(seen).toEqual(['Second take']);
+    // The queued take is still the next visit's, not a second delivery.
+    expect(pendingCount('song')).toBe(1);
+    expect(takeHandoff('song')).toEqual(item);
+  });
+
   it('queues again once the section has closed', () => {
     const stop = subscribeHandoff('song', () => {});
     stop();
