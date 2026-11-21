@@ -1,7 +1,7 @@
 // Tests for the WAV writer and parser: header layout, clipping behaviour,
 // error cases, and a lossless-enough round trip through both.
 import { describe, expect, it } from 'vitest';
-import { decodeWavPcm, encodeWav } from './audio';
+import { decodeWavPcm, encodeWav, resample } from './audio';
 
 function tone(length = 256, rate = 22_050): Float32Array {
   const samples = new Float32Array(length);
@@ -10,6 +10,30 @@ function tone(length = 256, rate = 22_050): Float32Array {
   }
   return samples;
 }
+
+describe('resample', () => {
+  it('keeps the passband: a 6 kHz tone survives a small ratio', () => {
+    const rate = 22_050;
+    const source = new Float32Array(4096);
+    for (let i = 0; i < source.length; i += 1) source[i] = Math.sin((2 * Math.PI * 6000 * i) / rate);
+
+    const out = resample(source, 1.026);
+    expect(out).toHaveLength(Math.round(source.length * 1.026));
+
+    let peak = 0;
+    for (let i = 1000; i < 3000; i += 1) peak = Math.max(peak, Math.abs(out[i]));
+    // Linear interpolation landed near 0.8 here (about -2 dB), which is the
+    // muffling this kernel exists to avoid; a band-limited one stays flat.
+    expect(peak).toBeGreaterThan(0.97);
+    expect(peak).toBeLessThan(1.03);
+  });
+
+  it('is a no-op at ratio 1 and tolerates empty input', () => {
+    const input = new Float32Array([0.1, -0.2, 0.3]);
+    expect(Array.from(resample(input, 1))).toEqual(Array.from(input));
+    expect(resample(new Float32Array(0), 2)).toHaveLength(0);
+  });
+});
 
 function header(buffer: ArrayBuffer) {
   const view = new DataView(buffer);

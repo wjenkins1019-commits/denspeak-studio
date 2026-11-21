@@ -13,13 +13,23 @@
 import type { NarrationSettings } from './narrate';
 import type { ParsedBook } from './ebook';
 
-/** FNV-1a over text + settings + voice: identifies exactly one render. */
+/**
+ * Bump whenever the render chain changes the audio it produces. The
+ * fingerprint is what lets a finished take (or a checkpointed paragraph) be
+ * adopted instead of re-rendered, so without this a take saved by an older
+ * chain would be handed back as "this exact render" and the change would never
+ * be heard. Version 2: the per-phrase shaping resamples instead of running the
+ * phase vocoder twice.
+ */
+export const RENDER_CHAIN_VERSION = 2;
+
+/** FNV-1a over chain version + text + settings + voice: one exact render. */
 export function jobFingerprint(input: {
   text: string;
   settings: NarrationSettings;
   voiceId: string;
 }): string {
-  const payload = `${input.voiceId}\n${JSON.stringify(input.settings)}\n${input.text}`;
+  const payload = `${RENDER_CHAIN_VERSION}\n${input.voiceId}\n${JSON.stringify(input.settings)}\n${input.text}`;
   let hash = 0x811c9dc5;
   for (let i = 0; i < payload.length; i += 1) {
     hash ^= payload.charCodeAt(i);

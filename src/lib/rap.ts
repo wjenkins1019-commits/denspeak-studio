@@ -5,7 +5,7 @@
 // are speech models: what makes a line sit on a beat is the timing of when it
 // starts and how long it takes, which is what this module controls.
 
-import { resampleLinear, timeStretch } from './audio';
+import { resample, timeStretch } from './audio';
 import { normalizePeak } from './dsp';
 
 export interface BeatSource {
@@ -52,7 +52,7 @@ const MAX_STRETCH = 1.9;
 
 function toRate(samples: Float32Array, from: number, to: number): Float32Array {
   if (from === to) return samples;
-  return resampleLinear(samples, to / from);
+  return resample(samples, to / from);
 }
 
 /** Fit one line into `slotSeconds` without mangling it beyond recognition. */

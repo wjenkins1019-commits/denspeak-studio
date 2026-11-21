@@ -19,7 +19,7 @@
 // All of it is plain arrays: no Web Audio graph, no native deps, so it runs in
 // the renderer and can be unit-tested.
 
-import { shiftPitch, timeStretch } from './audio';
+import { resample } from './audio';
 import { applyBiquad, compressSamples, makeBiquad, normalizePeak } from './dsp';
 import { extractVoiceTagWithSpeaker, type CastMember } from './cast';
 
@@ -246,9 +246,10 @@ function applyEdgeFades(samples: Float32Array, sampleRate: number): void {
 }
 
 /**
- * Join rendered blocks with silence. Each block gets its own tempo, pitch and
- * level so the read sounds like a person varying their delivery rather than one
- * metronomic take repeated, and the pauses between blocks are never identical.
+ * Join rendered blocks with silence. Each block gets its own tempo, the pitch
+ * that comes with it, and its own level, so the read sounds like a person
+ * varying their delivery rather than one metronomic take repeated, and the
+ * pauses between blocks are never identical.
  *
  * The span variant also reports where each block landed, so word timings
  * measured on the blocks can be placed on the finished take.
@@ -266,22 +267,23 @@ export function assembleSpeechWithSpans(
       return block.slice();
     }
 
-    // A reader never delivers two clauses at exactly the same speed. Up to
-    // ±3.5% is enough to break the metronome without sounding unsteady.
+    // A reader never delivers two clauses at exactly the same speed, and a
+    // phrase that slows a little also sits a little lower: ±3.5% of tempo
+    // carries about ±0.4 semitones of pitch with it, which is the "another
+    // phrase" variation wanted here. One band-limited resample does both and
+    // stays transparent, where the phase vocoder this replaced made the two
+    // moves separately — twice per phrase — and took roughly 11 dB out of the
+    // 6-11 kHz band, which is the muddiness you hear as a muffled voice.
     const tempo = 1 + jitter(index * 3 + 1, 0.035 * strength);
-    const stretched = timeStretch(block, tempo);
-
-    // Up to ±0.55 semitones — audible as "another phrase", not another person.
-    const drift = jitter(index * 3 + 2, 0.55 * strength);
-    const shifted = shiftPitch(stretched, drift);
+    const shaped = resample(block, tempo);
 
     // Micro-dynamics: ±0.6 dB per phrase, plus a paragraph-final settle.
     const settle = (pausesMs[index] ?? 0) >= PARAGRAPH_PAUSE_MS * 0.8 ? -0.06 : 0;
     const gain = Math.pow(10, (jitter(index * 3 + 3, 0.07 * strength) + settle * strength) / 20);
-    for (let i = 0; i < shifted.length; i += 1) shifted[i] *= gain;
+    for (let i = 0; i < shaped.length; i += 1) shaped[i] *= gain;
 
-    applyEdgeFades(shifted, sampleRate);
-    return shifted;
+    applyEdgeFades(shaped, sampleRate);
+    return shaped;
   });
 
   const pauseSamples = pausesMs.map((ms, index) => {

@@ -6,6 +6,8 @@
 
 const FRAME = 1024;
 const HOP = 256;
+/** Sinc lobes each side of the resampling kernel; more is a gentler passband edge. */
+const SINC_LOBES = 12;
 
 export interface VoiceShape {
   /** Pitch shift in semitones, roughly -14..14. */
@@ -79,19 +81,56 @@ function fft(re: Float32Array, im: Float32Array, inverse: boolean): void {
   }
 }
 
-/** Linear-interpolation resample. `factor` > 1 makes the signal longer. */
-export function resampleLinear(input: Float32Array, factor: number): Float32Array {
+/**
+ * Band-limited resample. `factor` > 1 makes the signal longer (and lower).
+ *
+ * The kernel is the difference between a clear voice and a muffled one. Linear
+ * interpolation is a low-pass: at 22.05 kHz it is already about 3 dB down by
+ * 10 kHz, which is exactly the band that carries a voice's air and consonant
+ * definition. That was easy to miss while this only ran on an explicit pitch
+ * change, but the per-phrase shaping calls it on every block, so it has to be
+ * transparent. A Hann-windowed sinc stays flat up to the new Nyquist and
+ * attenuates above it, which also keeps a plain decimation from folding
+ * aliases back into the voice.
+ */
+export function resample(input: Float32Array, factor: number): Float32Array {
+  if (input.length === 0) return new Float32Array(0);
   if (Math.abs(factor - 1) < 1e-6) return input.slice();
+
   const length = Math.max(1, Math.round(input.length * factor));
   const output = new Float32Array(length);
+  // Cutoff in cycles per input sample: never above the input Nyquist, and
+  // below the output Nyquist when decimating.
+  const cutoff = 0.5 * Math.min(1, factor);
+  // Half-width in input samples; it grows as the cutoff drops, so a decimation
+  // keeps the same number of sinc lobes instead of getting blurrier.
+  const radius = Math.max(2, SINC_LOBES / (2 * cutoff));
+  const reach = Math.ceil(radius);
+
   for (let i = 0; i < length; i += 1) {
     const position = i / factor;
-    const index = Math.floor(position);
-    const fraction = position - index;
-    const a = input[Math.min(index, input.length - 1)];
-    const b = input[Math.min(index + 1, input.length - 1)];
-    output[i] = a + (b - a) * fraction;
+    const centre = Math.floor(position);
+    const from = Math.max(0, centre - reach + 1);
+    const to = Math.min(input.length - 1, centre + reach);
+
+    let sum = 0;
+    let weight = 0;
+    for (let j = from; j <= to; j += 1) {
+      const offset = position - j;
+      if (Math.abs(offset) > radius) continue;
+      const arg = 2 * cutoff * offset;
+      const sinc = Math.abs(arg) < 1e-9 ? 1 : Math.sin(Math.PI * arg) / (Math.PI * arg);
+      const window = 0.5 + 0.5 * Math.cos((Math.PI * offset) / radius);
+      const coefficient = sinc * window;
+      sum += input[j] * coefficient;
+      weight += coefficient;
+    }
+
+    // Dividing by the kernel sum holds unity gain, including at the edges where
+    // the window is cut short.
+    output[i] = Math.abs(weight) > 1e-6 ? sum / weight : 0;
   }
+
   return output;
 }
 
@@ -255,7 +294,7 @@ export function shiftPitch(input: Float32Array, semitones: number): Float32Array
   if (Math.abs(amount) < 0.05) return input.slice();
   const rate = Math.pow(2, amount / 12);
   const stretched = timeStretch(input, rate);
-  return resampleLinear(stretched, 1 / rate);
+  return resample(stretched, 1 / rate);
 }
 
 /** Apply a Convert preset to a mono recording. */
