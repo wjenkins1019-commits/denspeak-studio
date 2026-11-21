@@ -55,6 +55,7 @@ import {
 import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
+import { sendHandoff, type HandoffTarget } from '../lib/handoff';
 
 interface StudioProps {
   voiceId: string;
@@ -65,6 +66,14 @@ interface StudioProps {
 
 const STUDIO_GROUP = 'studio';
 const AUDIOBOOK_GROUP = 'audiobook';
+
+// Sections a finished take can be handed to, in nav order.
+const SEND_TARGETS: Array<{ target: HandoffTarget; label: string }> = [
+  { target: 'convert', label: 'Convert' },
+  { target: 'transcribe', label: 'Transcribe' },
+  { target: 'process', label: 'Shape' },
+  { target: 'song', label: 'Beat' },
+];
 
 const SAMPLE = `Every sentence you write here leaves this machine as audio, spoken by a voice that runs on your own processor. Nothing is uploaded, and nothing is billed.
 
@@ -486,6 +495,13 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
         voiceName: takeVoiceName(),
       },
     ]);
+  }
+
+  /** Hand this take to another section, which picks it up when it mounts. */
+  function sendTakeTo(target: HandoffTarget) {
+    if (!take) return;
+    sendHandoff(target, { name: take.name, blob: take.blob });
+    window.location.hash = `#/${target}`;
   }
 
   /** Latest single narration; the take and A/B below read straight off it. */
@@ -966,6 +982,23 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             take && (
               <Player blob={take.blob} name={take.name} captions={take.captions} takeId={take.id} />
             )
+          )}
+
+          {take && (
+            <div className="row between">
+              <small className="muted">Send this take to</small>
+              <div className="row">
+                {SEND_TARGETS.map((entry) => (
+                  <button
+                    key={entry.target}
+                    className="btn ghost small"
+                    onClick={() => sendTakeTo(entry.target)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           <div className="hint">

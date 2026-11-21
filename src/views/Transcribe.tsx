@@ -1,9 +1,10 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { decodeToMono } from '../lib/audio';
 import { exportFileName, saveBlob } from '../lib/export';
 import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { Player } from '../components/Player';
+import { takeHandoff } from '../lib/handoff';
 
 interface Source {
   blob: Blob;
@@ -25,6 +26,14 @@ export default function Transcribe() {
   const [, setDraft] = useSetting<string>(SETTING_KEYS.draft, '');
 
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // A take handed over from Studio arrives as this section's sample.
+  useEffect(() => {
+    const handed = takeHandoff('transcribe');
+    if (handed) void load(new File([handed.blob], handed.name, { type: handed.blob.type }));
+    // Runs once: the hand-off is consumed on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function load(file: File | undefined) {
     if (!file) return;

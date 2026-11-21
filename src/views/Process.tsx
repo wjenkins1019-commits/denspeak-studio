@@ -19,6 +19,7 @@ import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
+import { takeHandoff } from '../lib/handoff';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
 
@@ -71,6 +72,13 @@ export default function Process() {
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // A take handed over from Studio arrives as this section's sample.
+  useEffect(() => {
+    const handed = takeHandoff('process');
+    if (handed) loadSource(handed.blob, handed.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const style = useMemo(() => styleById(styleId), [styleId]);
 

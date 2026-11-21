@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { decodeToMono, transformVoice, wavBlob, type VoiceShape } from '../lib/audio';
 import { applyEq, sameBands, styleById, type EqBand } from '../lib/eq';
 import { saveTake, type Take } from '../lib/library';
@@ -6,6 +6,7 @@ import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
+import { takeHandoff } from '../lib/handoff';
 import { EqPanel } from '../components/EqPanel';
 
 interface Preset {
@@ -58,6 +59,12 @@ export default function Convert() {
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // A take handed over from Studio arrives as this section's source.
+  useEffect(() => {
+    const handed = takeHandoff('convert');
+    if (handed) setSource({ blob: handed.blob, name: handed.name });
+  }, []);
 
   const style = useMemo(() => styleById(eqId), [eqId]);
   const bands = editedBands ?? style.bands;

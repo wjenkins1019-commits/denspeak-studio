@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { VOICES, VOICES_BY_ID, voiceLabel } from '../voices';
 import { renderSpeech } from '../lib/tts';
 import { decodeToMono, wavBlob } from '../lib/audio';
@@ -9,6 +9,7 @@ import { saveTake, type Take } from '../lib/library';
 import { titleFromScript } from '../lib/format';
 import { DEFAULT_VOICE, SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
+import { takeHandoff } from '../lib/handoff';
 
 const LYRICS_SAMPLE = `I write it once, the beat decides the pace
 Every line I drop lands exactly in its place
@@ -40,6 +41,14 @@ export default function Song() {
 
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // A take handed over from Studio arrives as this section's beat.
+  useEffect(() => {
+    const handed = takeHandoff('song');
+    if (handed) void readBeat(handed.name, handed.blob);
+    // Runs once: the hand-off is consumed on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const lines = useMemo(
     () =>
       lyrics
@@ -52,10 +61,12 @@ export default function Song() {
   const beatSeconds = 60 / Math.max(30, bpm);
   const estimatedSeconds = lines.length * beatSeconds * beatsPerLine;
 
-  async function handleBeat(files: FileList | null) {
+  function handleBeat(files: FileList | null) {
     const file = files?.[0];
-    if (!file) return;
+    if (file) void readBeat(file.name, file);
+  }
 
+  async function readBeat(name: string, file: Blob) {
     setError(null);
     setBusy(true);
     setStatus('Reading the beat…');
@@ -66,7 +77,7 @@ export default function Song() {
       await new Promise((resolve) => requestAnimationFrame(resolve));
 
       const detected = detectTempo(decoded.samples, decoded.sampleRate);
-      setBeat({ name: file.name, samples: decoded.samples, sampleRate: decoded.sampleRate });
+      setBeat({ name, samples: decoded.samples, sampleRate: decoded.sampleRate });
       setTempo(detected);
 
       if (detected.bpm > 0) {
@@ -188,7 +199,7 @@ export default function Song() {
               ref={fileRef}
               type="file"
               accept="audio/*"
-              onChange={(event) => void handleBeat(event.target.files)}
+              onChange={(event) => handleBeat(event.target.files)}
             />
             {beat && <small className="muted">{beat.name}</small>}
           </div>

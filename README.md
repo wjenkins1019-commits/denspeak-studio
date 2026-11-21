@@ -115,6 +115,7 @@ version check and does not create or touch any Release.
 | `src/lib/pronounce.ts` | Custom pronunciations, applied before every render; Studio previews them |
 | `src/lib/export.ts` | WAV export and the stored ZIP bundle of the library |
 | `src/lib/library.ts` | IndexedDB take store |
+| `src/lib/handoff.ts` | Hands a finished take to Convert, Transcribe, Shape or Song without a file round-trip |
 | `src/voices.ts` | Generated voice catalog (121 models) |
 | `legacy-build/` | Local-only copy of the original compiled app, untouched, for diffing (not in git; the maintainer keeps it out of the repo) |
 
