@@ -59,15 +59,22 @@ export function useHandoffTake<S>(
   const latest = useRef({ current, apply, restore });
   latest.current = { current, apply, restore };
 
+  // Whether this visit already has its take. StrictMode mounts the view,
+  // cleans up and mounts it again in development; if the second subscription
+  // took one too, it would drain the next take and replace the arrival that
+  // was already on screen, losing the first one without a word.
+  const landed = useRef(false);
+
   /** Land `item`, then take stock of what is still queued behind it. */
   function deliver(item: HandoffItem) {
     const before = latest.current.current;
     latest.current.apply(item);
+    landed.current = true;
     setArrival({ item, before });
     setWaiting(pendingCount(target));
   }
 
-  useEffect(() => subscribeHandoff(target, deliver), [target]);
+  useEffect(() => subscribeHandoff(target, deliver, { take: !landed.current }), [target]);
 
   return {
     arrival,

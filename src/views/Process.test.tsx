@@ -12,7 +12,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Process from './Process';
-import { clearHandoff, sendHandoff } from '../lib/handoff';
+import { clearHandoff, pendingCount, sendHandoff } from '../lib/handoff';
 
 vi.mock('../lib/tts', () => ({
   renderSpeech: vi.fn(async () => new Blob(['tts'])),
@@ -98,16 +98,22 @@ describe('Shape hand-off', () => {
     expect(document.activeElement).toBe(field);
   });
 
-  // Not under StrictMode: a double mount would drain two takes and skip the
-  // queue this is about.
+  // Under StrictMode on purpose: the second subscription its extra mount opens
+  // must not drain the take still queued behind the one on screen.
   it('reports the take queued behind the first and takes it in place', () => {
     sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
     sendHandoff('process', { name: 'Second sample', blob: new Blob(['b']), duration: 4 });
 
-    render(<Process />);
+    render(
+      <StrictMode>
+        <Process />
+      </StrictMode>,
+    );
 
     expect(screen.getAllByText('First sample loaded. Shape it, then apply.')).toHaveLength(1);
     expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+    // Still queued, not swallowed by the remount.
+    expect(pendingCount('process')).toBe(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
 

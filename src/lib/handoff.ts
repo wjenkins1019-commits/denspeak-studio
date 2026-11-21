@@ -259,11 +259,29 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
  * When this run has nothing queued yet, the store is asked first, so a take
  * that was waiting when the app reloaded still arrives in the section it was
  * sent to.
+ *
+ * `take: false` joins without taking a queued take, for a listener that only
+ * has to stay open — the second subscription React's StrictMode runs in
+ * development, after the first has already been handed its take.
  */
-export function subscribeHandoff(target: HandoffTarget, listener: Listener): () => void {
+export function subscribeHandoff(
+  target: HandoffTarget,
+  listener: Listener,
+  options: { take?: boolean } = {},
+): () => void {
   const listeners = open.get(target) ?? new Set<Listener>();
   open.set(target, listeners);
   listeners.add(listener);
+
+  const stop = () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) open.delete(target);
+  };
+
+  // Joining only to stay open. A take sent from here on still arrives through
+  // `sendHandoff`; nothing queued is taken from under the listener that just
+  // had one.
+  if (options.take === false) return stop;
 
   const queued = takeHandoff(target);
   if (queued) listener(queued);
@@ -276,10 +294,7 @@ export function subscribeHandoff(target: HandoffTarget, listener: Listener): () 
     });
   }
 
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) open.delete(target);
-  };
+  return stop;
 }
 
 /**
