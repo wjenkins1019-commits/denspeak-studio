@@ -3,7 +3,7 @@
 // that created them: navigating swaps the view, not the page. They are also
 // written to a store, so a reload does not take the audio with it.
 
-import { indexedDbHandoffStore, type HandoffStore } from './handoffStore';
+import { indexedDbHandoffStore, type HandoffRecord, type HandoffStore } from './handoffStore';
 
 export type HandoffTarget = 'studio' | 'convert' | 'transcribe' | 'process' | 'song';
 
@@ -75,6 +75,16 @@ export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = 
   { target: 'song', label: 'Beat' },
 ];
 
+/**
+ * What a section may leave waiting on disk: a take nobody opened in a week is
+ * stale, and no section needs more than a handful in the queue. Both limits are
+ * applied to storage only, so nothing this session is holding disappears from
+ * under the user — a take still queued here stays deliverable until it is
+ * taken.
+ */
+export const HANDOFF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const HANDOFF_MAX_STORED = 8;
+
 type Listener = (item: HandoffItem) => void;
 
 interface Pending {
@@ -112,6 +122,30 @@ function write(work: () => Promise<void>): void {
   writes = writes.then(work, work).catch(() => {});
 }
 
+/**
+ * Delete stored rows that are stale or over a section's limit, newest first so
+ * the newest takes are the ones that survive. Storage only: the queues this
+ * session holds are untouched.
+ */
+async function pruneStored(rows?: HandoffRecord[]): Promise<void> {
+  try {
+    const all = rows ?? (await store.list());
+    const cutoff = Date.now() - HANDOFF_MAX_AGE_MS;
+    const kept = new Map<HandoffTarget, number>();
+
+    for (const row of [...all].reverse()) {
+      const count = kept.get(row.target) ?? 0;
+      if (row.at >= cutoff && count < HANDOFF_MAX_STORED) {
+        kept.set(row.target, count + 1);
+        continue;
+      }
+      await store.remove(row.key);
+    }
+  } catch {
+    // Storage unavailable: there is nothing to prune.
+  }
+}
+
 let hydration: Promise<void> | null = null;
 
 /**
@@ -132,16 +166,31 @@ function hydrate(): Promise<void> {
           for (const entry of queue) held.add(entry.key);
         }
 
+                const cutoff = Date.now() - HANDOFF_MAX_AGE_MS;
+        const kept = new Map<HandoffTarget, number>();
         const byTarget = new Map<HandoffTarget, Pending[]>();
-        for (const row of rows) {
-          if (consumed.has(row.key) || held.has(row.key)) continue;
+
+        // Newest first, so a section's newest takes are the ones that survive
+        // the age and count limits; `unshift` puts them back in send order.
+        for (const row of [...rows].reverse()) {
+          if (consumed.has(row.key)) continue;
+
+          const count = kept.get(row.target) ?? 0;
+          if (row.at < cutoff || count >= HANDOFF_MAX_STORED) continue;
+          kept.set(row.target, count + 1);
+          if (held.has(row.key)) continue;
+
           const list = byTarget.get(row.target) ?? [];
-          list.push({ item: row.item, key: row.key });
+          list.unshift({ item: row.item, key: row.key });
           byTarget.set(row.target, list);
         }
+
         for (const [target, list] of byTarget) {
           pending.set(target, [...list, ...(pending.get(target) ?? [])]);
         }
+
+        // Stale, over-limit and already-taken rows are not coming back.
+        void pruneStored(rows);
       })
       .catch(() => {
         // Storage unavailable: the hand-off still works for this session.
@@ -171,8 +220,10 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   if (queue) queue.push({ item, key });
   else pending.set(target, [{ item, key }]);
 
+  // Written, then pruned: a section nobody opens must not collect takes on disk
+  // for ever.
   const at = Date.now();
-  write(() => store.put({ key, target, at, item }));
+  write(() => store.put({ key, target, at, item }).then(() => pruneStored()));
 }
 
 /**
@@ -244,6 +295,11 @@ function isTarget(section: HandoffSource): section is HandoffTarget {
 export function returnTake(to: HandoffSource, item: HandoffItem): void {
   if (isTarget(to)) sendHandoff(to, { ...item, returned: true });
   openSection(to);
+}
+
+/** How many takes are waiting for a section, not counting one it has taken. */
+export function pendingCount(target: HandoffTarget): number {
+  return pending.get(target)?.length ?? 0;
 }
 
 /**

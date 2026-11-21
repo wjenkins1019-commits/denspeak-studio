@@ -6,6 +6,10 @@ import { currentSection, returnTake, sectionLabel, type HandoffItem } from '../l
  * offers the way back to where the take came from, and carries the take with it
  * so that section is not empty on return.
  *
+ * A section is handed one take per visit, so a queue behind the one on screen is
+ * reported as "N more waiting" and "Next take" moves through it without leaving
+ * the section.
+ *
  * A take sent back arrives marked as returned, so the section that gets it back
  * reads a confirmation that the take is home rather than an arrival from
  * elsewhere — the forward hand-off keeps its own wording.
@@ -16,26 +20,40 @@ import { currentSection, returnTake, sectionLabel, type HandoffItem } from '../l
 export function HandoffNotice({
   item,
   replaced,
+  waiting = 0,
+  onNext,
   onKeep,
 }: {
   item: HandoffItem;
   replaced: boolean;
+  /** Takes still queued behind this one for the section showing it. */
+  waiting?: number;
+  onNext?: () => void;
   onKeep: () => void;
 }) {
   const here = currentSection();
   const returning = item.returned === true;
   const back = here && item.from && item.from !== here ? item.from : null;
+  const notes = [
+    replaced ? 'it replaced the take you had' : '',
+    waiting > 0 ? `${waiting} more waiting` : '',
+  ].filter(Boolean);
 
   return (
     <div className="row between">
       <small className="muted">
         {returning ? 'Your take is back:' : 'Arrived from another section:'} {item.name}
-        {replaced ? ' — it replaced the take you had.' : ''}
+        {notes.length > 0 ? ` — ${notes.join(' · ')}` : ''}
       </small>
       <div className="row">
         {back && (
           <button className="btn ghost small" onClick={() => returnTake(back, item)}>
             Back to {sectionLabel(back)}
+          </button>
+        )}
+        {waiting > 0 && onNext && (
+          <button className="btn ghost small" onClick={onNext}>
+            Next take
           </button>
         )}
         <button className="btn ghost small" onClick={onKeep}>

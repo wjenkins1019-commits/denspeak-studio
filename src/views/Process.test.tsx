@@ -70,6 +70,23 @@ describe('Shape hand-off', () => {
     expect(screen.getAllByText('First sample loaded. Shape it, then apply.')).toHaveLength(1);
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
+
+  // Not under StrictMode: a double mount would drain two takes and skip the
+  // queue this is about.
+  it('reports the take queued behind the first and takes it in place', () => {
+    sendHandoff('process', { name: 'First sample', blob: new Blob(['a']), duration: 2 });
+    sendHandoff('process', { name: 'Second sample', blob: new Blob(['b']), duration: 4 });
+
+    render(<Process />);
+
+    expect(screen.getAllByText('First sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+
+    expect(screen.getAllByText('Second sample loaded. Shape it, then apply.')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Next take' })).toBeNull();
+  });
 });
 
 describe('Shape preset undo', () => {

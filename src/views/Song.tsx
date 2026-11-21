@@ -253,6 +253,8 @@ export default function Song() {
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}
+              waiting={handoff.waiting}
+              onNext={handoff.next}
               onKeep={handoff.keep}
             />
           )}

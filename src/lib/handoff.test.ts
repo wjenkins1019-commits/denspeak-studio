@@ -10,6 +10,9 @@ import {
   setHandoffStore,
   subscribeHandoff,
   takeHandoff,
+  pendingCount,
+  HANDOFF_MAX_AGE_MS,
+  HANDOFF_MAX_STORED,
   HANDOFF_TARGETS,
   type HandoffItem,
 } from './handoff';
@@ -222,11 +225,14 @@ describe('durable queue', () => {
     sendHandoff('convert', item);
     await vi.waitFor(() => expect(store.rows.size).toBe(1));
 
+    // Sending also prunes storage, which reads it back once.
+    await vi.waitFor(() => expect(store.lists).toBe(1));
+
     // Another section opening reads the store back. Convert's take has only
     // been sent, not taken, so its row is still there and must be recognised
     // as the take already waiting in memory.
     const stopEmpty = subscribeHandoff('process', () => {});
-    await vi.waitFor(() => expect(store.lists).toBe(1));
+    await vi.waitFor(() => expect(store.lists).toBe(2));
     await new Promise((resolve) => setTimeout(resolve, 0));
     stopEmpty();
 
@@ -252,5 +258,46 @@ describe('durable queue', () => {
     stop();
 
     expect(names).toEqual(['A take']);
+  });
+
+  it('counts how many takes are still waiting for a section', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+
+    expect(pendingCount('convert')).toBe(2);
+    takeHandoff('convert');
+    expect(pendingCount('convert')).toBe(1);
+    expect(pendingCount('song')).toBe(0);
+  });
+
+  it('drops a stored take nobody opened within the week', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    for (const row of store.rows.values()) row.at = Date.now() - HANDOFF_MAX_AGE_MS - 1000;
+
+    clearHandoff();
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    stop();
+
+    // Stale audio is not handed over a week late; the row is gone with it.
+    expect(seen).toEqual([]);
+  });
+
+  it('keeps only a section’s newest takes on disk', async () => {
+    for (let index = 0; index <= HANDOFF_MAX_STORED + 2; index += 1) {
+      sendHandoff('convert', { ...item, name: `Take ${index}` });
+    }
+    await vi.waitFor(() => expect(store.rows.size).toBe(HANDOFF_MAX_STORED));
+
+    const names = [...store.rows.values()]
+      .sort((a, b) => a.at - b.at)
+      .map((row) => row.item.name);
+    expect(names[0]).toBe('Take 3');
+    expect(names[names.length - 1]).toBe(`Take ${HANDOFF_MAX_STORED + 2}`);
+    // Only storage is bounded: the session still holds every take it queued.
+    expect(pendingCount('convert')).toBe(HANDOFF_MAX_STORED + 3);
   });
 });

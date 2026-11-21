@@ -5,7 +5,7 @@
 // Which section the notice is in comes from the route, never from a prop, so a
 // sender can never be offered a way "back" to itself.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HandoffNotice } from './HandoffNotice';
 import { clearHandoff, HANDOFF_TARGETS, takeHandoff } from '../lib/handoff';
 
@@ -73,6 +73,17 @@ describe('HandoffNotice', () => {
     expect(screen.getByText(/Your take is back: A take/)).toBeTruthy();
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Got it' })).toBeTruthy();
+  });
+
+  it('says how many takes are still waiting and offers the next one', () => {
+    window.history.replaceState(null, '', '#/convert');
+    const next = vi.fn();
+
+    render(<HandoffNotice item={arrived} replaced={false} waiting={2} onNext={next} onKeep={() => {}} />);
+
+    expect(screen.getByText(/2 more waiting/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    expect(next).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the arrival wording for a forward hand-off', () => {
