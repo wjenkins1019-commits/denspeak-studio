@@ -64,7 +64,7 @@ function fitLine(line: RenderedLine, slotSeconds: number): { samples: Float32Arr
   const rate = Math.min(MAX_STRETCH, Math.max(MIN_STRETCH, desired));
   if (Math.abs(rate - 1) < 0.02) return { samples: line.samples, stretched: false };
 
-  return { samples: timeStretch(line.samples, rate), stretched: true };
+  return { samples: timeStretch(line.samples, rate, line.sampleRate), stretched: true };
 }
 
 /**

@@ -220,7 +220,7 @@ scope.onmessage = (event) => {
     // sides stay the same length.
     const rawSamples = needsShape
       ? needsSpeed
-        ? timeStretch(beforeShape, 1 / request.speed)
+        ? timeStretch(beforeShape, 1 / request.speed, request.sampleRate)
         : beforeShape
       : null;
 
@@ -232,7 +232,7 @@ scope.onmessage = (event) => {
 
     if (needsSpeed) {
       const preSpeedLength = samples.length;
-      samples = timeStretch(samples, 1 / request.speed);
+      samples = timeStretch(samples, 1 / request.speed, request.sampleRate);
       spans = rescaleSpans(spans, preSpeedLength, samples.length);
     }
 

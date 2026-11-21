@@ -8,11 +8,20 @@ const FRAME = 1024;
 const HOP = 256;
 /** Sinc lobes each side of the resampling kernel; more is a gentler passband edge. */
 const SINC_LOBES = 12;
-/** Pitch search range for the stretch, in samples: 55 Hz to 550 Hz at 22.05 kHz. */
-const PITCH_MIN_LAG = 40;
-const PITCH_MAX_LAG = 400;
-const MIN_SEARCH = 48;
-const MAX_SEARCH = 256;
+/**
+ * The stretch measures time, not samples. A pitch search of 40..400 samples is
+ * 550..55 Hz only at 22.05 kHz; the same numbers on a 48 kHz Convert recording
+ * cover 110..1102 Hz, so a low voice slips under the range and the half-period
+ * reach clamps again. Every figure below is therefore a duration, with 22.05 kHz
+ * as the reference the old sample counts happened to fit.
+ */
+const REFERENCE_RATE = 22_050;
+const PITCH_MIN_PERIOD_SECONDS = 40 / REFERENCE_RATE;
+const PITCH_MAX_PERIOD_SECONDS = 400 / REFERENCE_RATE;
+const MIN_SEARCH_SECONDS = 48 / REFERENCE_RATE;
+const MAX_SEARCH_SECONDS = 256 / REFERENCE_RATE;
+/** Correlation window for scoring a candidate frame: ~1.5 pitch periods. */
+const OVERLAP_SECONDS = 320 / REFERENCE_RATE;
 /** Samples compared when scoring a candidate frame: a couple of pitch periods. */
 const WSOLA_OVERLAP = 320;
 /**
@@ -158,15 +167,20 @@ export function resample(input: Float32Array, factor: number): Float32Array {
  * be hard-coded, while a female voice wants far less. So the period is read off
  * the input once per call and the reach follows it.
  */
-function searchReach(input: Float32Array): number {
+function searchReach(input: Float32Array, sampleRate: number): number {
+  const minLag = Math.max(4, Math.round(PITCH_MIN_PERIOD_SECONDS * sampleRate));
+  const maxLag = Math.max(minLag + 1, Math.round(PITCH_MAX_PERIOD_SECONDS * sampleRate));
+  const minSearch = Math.max(8, Math.round(MIN_SEARCH_SECONDS * sampleRate));
+  const maxSearch = Math.max(minSearch + 1, Math.round(MAX_SEARCH_SECONDS * sampleRate));
+
   const size = Math.min(2048, input.length);
-  if (size < PITCH_MAX_LAG * 2) return MIN_SEARCH;
+  if (size < maxLag * 2) return minSearch;
 
   // Pitch is easiest to read where there is signal, so start from the loudest
   // window that still has room for a full lag.
   let start = 0;
   let loudest = -1;
-  for (let position = 0; position + size + PITCH_MAX_LAG <= input.length; position += size) {
+  for (let position = 0; position + size + maxLag <= input.length; position += size) {
     let sum = 0;
     for (let i = 0; i < size; i += 1) sum += input[position + i] * input[position + i];
     if (sum > loudest) {
@@ -174,12 +188,12 @@ function searchReach(input: Float32Array): number {
       start = position;
     }
   }
-  if (loudest <= 0) return MIN_SEARCH;
+  if (loudest <= 0) return minSearch;
 
-  const lags = PITCH_MAX_LAG - PITCH_MIN_LAG + 1;
+  const lags = maxLag - minLag + 1;
   const scores = new Float32Array(lags);
   let peak = 0;
-  for (let lag = PITCH_MIN_LAG; lag <= PITCH_MAX_LAG; lag += 1) {
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
     let dot = 0;
     let left = 0;
     let right = 0;
@@ -191,20 +205,20 @@ function searchReach(input: Float32Array): number {
       right += b * b;
     }
     const score = dot / Math.sqrt(left * right + 1e-9);
-    scores[lag - PITCH_MIN_LAG] = score;
+    scores[lag - minLag] = score;
     if (score > peak) peak = score;
   }
 
   // The first peak close to the best is the period; the ones after it are its
   // multiples, and half of one of those would be a whole period too far.
-  if (peak < 0.3) return MIN_SEARCH;
+  if (peak < 0.3) return minSearch;
   for (let index = 1; index < lags - 1; index += 1) {
     const score = scores[index];
     if (score < peak * 0.85) continue;
     if (score < scores[index - 1] || score < scores[index + 1]) continue;
-    return Math.min(MAX_SEARCH, Math.max(MIN_SEARCH, Math.round((index + PITCH_MIN_LAG) / 2)));
+    return Math.min(maxSearch, Math.max(minSearch, Math.round((index + minLag) / 2)));
   }
-  return MIN_SEARCH;
+  return minSearch;
 }
 
 /**
@@ -277,7 +291,7 @@ function bestCandidate(
  * no phasiness, and harmonics and noise bursts come out as they went in. Pitch
  * is untouched because the waveform is never resampled.
  */
-export function timeStretch(input: Float32Array, rate: number): Float32Array {
+export function timeStretch(input: Float32Array, rate: number, sampleRate: number): Float32Array {
   if (input.length < FRAME || Math.abs(rate - 1) < 0.001) return input.slice();
 
   const window = hann(FRAME);
@@ -288,8 +302,8 @@ export function timeStretch(input: Float32Array, rate: number): Float32Array {
 
   // Last start that still holds a whole frame, so no frame is half zeros.
   const limit = Math.max(0, input.length - FRAME);
-  const overlap = Math.min(WSOLA_OVERLAP, FRAME);
-  const reach = searchReach(input);
+  const overlap = Math.min(Math.max(32, Math.round(OVERLAP_SECONDS * sampleRate)), FRAME);
+  const reach = searchReach(input, sampleRate);
   /** Segment picked for the previous frame; -1 before the first one. */
   let previous = -1;
 
@@ -426,11 +440,11 @@ function shapeSpectrum(
 }
 
 /** Pitch-shift by resampling a phase-vocoder stretch, so duration is preserved. */
-export function shiftPitch(input: Float32Array, semitones: number): Float32Array {
+export function shiftPitch(input: Float32Array, semitones: number, sampleRate: number): Float32Array {
   const amount = clamp(semitones, -24, 24);
   if (Math.abs(amount) < 0.05) return input.slice();
   const rate = Math.pow(2, amount / 12);
-  const stretched = timeStretch(input, rate);
+  const stretched = timeStretch(input, rate, sampleRate);
   return resample(stretched, 1 / rate);
 }
 
@@ -444,7 +458,7 @@ export function transformVoice(
   const formant = clamp(shape.formant ?? 0, -1, 1);
   const brightness = clamp(shape.brightness ?? 0, -1, 1);
 
-  const pitched = shiftPitch(input, semitones);
+  const pitched = shiftPitch(input, semitones, sampleRate);
   return shapeSpectrum(pitched, sampleRate, formant, brightness);
 }
 

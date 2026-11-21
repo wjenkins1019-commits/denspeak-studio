@@ -318,7 +318,7 @@ describe('synthesis alignment accuracy', () => {
     );
     let spans = rescaleSpans(assembledSpans, beforeShape.length, shaped.length);
     const preSpeed = shaped.length;
-    const finished = timeStretch(shaped, 1 / 1.05);
+    const finished = timeStretch(shaped, 1 / 1.05, RATE);
     spans = rescaleSpans(spans, preSpeed, finished.length);
 
     const errors: number[] = [];

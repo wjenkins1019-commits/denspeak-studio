@@ -19,7 +19,7 @@ describe('timeStretch', () => {
       source[i] = 0.5 * Math.sin((2 * Math.PI * 200 * i) / rate);
     }
 
-    const out = timeStretch(source, 1.2);
+    const out = timeStretch(source, 1.2, rate);
     expect(out).toHaveLength(Math.round(source.length * 1.2));
 
     // A coherent stretch must neither gain nor lose the tone: normalising by
@@ -55,7 +55,7 @@ describe('timeStretch', () => {
       source[i] = 0.45 * Math.sin((2 * Math.PI * 85 * i) / rate);
     }
 
-    const out = timeStretch(source, 1 / 0.9);
+    const out = timeStretch(source, 1 / 0.9, rate);
     expect(out).toHaveLength(Math.round(source.length * (1 / 0.9)));
 
     const from = Math.floor(rate / 2);
