@@ -55,6 +55,12 @@ export interface HandoffItem {
    * would have used to go back, so the receiver offers that way back itself.
    */
   from?: HandoffSource;
+  /**
+   * Set when a section sent this take back to its sender rather than passing it
+   * on, so the receiving notice can confirm the take is home instead of
+   * announcing an arrival from somewhere else.
+   */
+  returned?: true;
 }
 
 /** Sections a take can be sent to, with the label their button shows. */
@@ -142,7 +148,7 @@ function isTarget(section: HandoffSource): section is HandoffTarget {
  * keep their own work on disk, so for them opening the section is enough.
  */
 export function returnTake(to: HandoffSource, item: HandoffItem): void {
-  if (isTarget(to)) sendHandoff(to, item);
+  if (isTarget(to)) sendHandoff(to, { ...item, returned: true });
   openSection(to);
 }
 

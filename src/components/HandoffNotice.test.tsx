@@ -29,7 +29,7 @@ describe('HandoffNotice', () => {
     expect(window.history.length).toBe(depth);
     // The sender unmounted when the take left it, so reopening its route alone
     // would land on an empty section. The take has to come back too.
-    expect(takeHandoff('convert')).toEqual(arrived);
+    expect(takeHandoff('convert')).toEqual({ ...arrived, returned: true });
   });
 
   it('names the sender by its UI label, and queues nothing for a section that keeps its own work', () => {
@@ -51,5 +51,26 @@ describe('HandoffNotice', () => {
 
     expect(screen.queryByRole('button', { name: /^Back to/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'Got it' })).toBeTruthy();
+  });
+
+  it('confirms the take is home when a section sent it back', () => {
+    window.history.replaceState(null, '', '#/convert');
+
+    render(<HandoffNotice item={{ ...arrived, returned: true }} replaced={false} onKeep={() => {}} />);
+
+    // The section that gets its own take back was not sent anything new, and
+    // the button is only there to dismiss a line it already knows.
+    expect(screen.getByText(/Your take is back: A take/)).toBeTruthy();
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Got it' })).toBeTruthy();
+  });
+
+  it('keeps the arrival wording for a forward hand-off', () => {
+    window.history.replaceState(null, '', '#/song');
+
+    render(<HandoffNotice item={arrived} replaced={false} onKeep={() => {}} />);
+
+    expect(screen.getByText(/Arrived from another section: A take/)).toBeTruthy();
+    expect(screen.queryByText(/Your take is back/)).toBeNull();
   });
 });

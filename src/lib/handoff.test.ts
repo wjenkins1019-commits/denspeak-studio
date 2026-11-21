@@ -99,7 +99,8 @@ describe('returnTake', () => {
     returnTake('convert', item);
 
     expect(window.location.hash).toBe('#/convert');
-    expect(takeHandoff('convert')).toEqual(item);
+    // Marked, so the sender's notice can tell a returned take from a new one.
+    expect(takeHandoff('convert')).toEqual({ ...item, returned: true });
   });
 
   it('only opens a section that keeps its own work', () => {
