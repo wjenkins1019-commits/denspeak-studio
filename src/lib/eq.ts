@@ -335,6 +335,14 @@ export function deleteCustomStyle(id: string): void {
   writeCustomStyles(listCustomStyles().filter((style) => style.id !== id));
 }
 
+/**
+ * Put a deleted style back exactly as it was, keeping its id, so anything that
+ * names it — a saved voice, a Studio project — resolves again.
+ */
+export function restoreCustomStyle(style: EqStyle): void {
+  writeCustomStyles([...listCustomStyles().filter((saved) => saved.id !== style.id), style]);
+}
+
 export function isCustomStyleId(id: string): boolean {
   return id.startsWith(CUSTOM_PREFIX);
 }

@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 // Queued takes are held per section, not in one slot for the whole app: a send
 // to a second section before the first is opened must not drop the first take.
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearHandoff,
   currentSection,
   returnTake,
   sendHandoff,
+  setHandoffStore,
   subscribeHandoff,
   takeHandoff,
   HANDOFF_TARGETS,
+  type HandoffItem,
 } from './handoff';
+import type { HandoffRecord, HandoffStore } from './handoffStore';
 
 const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
 
@@ -150,5 +153,79 @@ describe('returnTake', () => {
     expect(window.location.hash).toBe('#/library');
     // Library holds its takes in the database, so nothing needs carrying.
     for (const { target } of HANDOFF_TARGETS) expect(takeHandoff(target)).toBeNull();
+  });
+});
+
+/** The durable half of the queue, in memory so a reload can be simulated. */
+class MemoryStore implements HandoffStore {
+  readonly rows = new Map<string, HandoffRecord>();
+
+  async list(): Promise<HandoffRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: HandoffRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  async remove(key: string): Promise<void> {
+    this.rows.delete(key);
+  }
+}
+
+describe('durable queue', () => {
+  const store = new MemoryStore();
+
+  beforeEach(() => {
+    store.rows.clear();
+    setHandoffStore(store);
+    clearHandoff();
+  });
+
+  afterEach(() => {
+    setHandoffStore(null);
+    clearHandoff();
+  });
+
+  it('brings back a take that was still waiting when the app reloaded', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    // A reload: the in-memory queue is gone, the stored take is not.
+    clearHandoff();
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    stop();
+
+    expect(seen[0]).toEqual(item);
+    // Taken once, so the next load starts empty instead of replaying it.
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
+  it('stores nothing for a section that is open, which takes the take directly', async () => {
+    const stop = subscribeHandoff('song', () => {});
+
+    sendHandoff('song', item);
+    await Promise.resolve();
+    stop();
+
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('hands stored takes over oldest first, one per visit', async () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+
+    clearHandoff();
+    const names: string[] = [];
+    const stop = subscribeHandoff('convert', (handed) => names.push(handed.name));
+
+    await vi.waitFor(() => expect(names).toHaveLength(1));
+    stop();
+
+    expect(names).toEqual(['A take']);
   });
 });

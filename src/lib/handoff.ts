@@ -1,6 +1,9 @@
 // Passing a finished take to another section without exporting a WAV and
 // uploading it again. Queued takes are module state, which outlives the view
-// that created them: navigating swaps the view, not the page.
+// that created them: navigating swaps the view, not the page. They are also
+// written to a store, so a reload does not take the audio with it.
+
+import { indexedDbHandoffStore, type HandoffStore } from './handoffStore';
 
 export type HandoffTarget = 'studio' | 'convert' | 'transcribe' | 'process' | 'song';
 
@@ -74,13 +77,69 @@ export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = 
 
 type Listener = (item: HandoffItem) => void;
 
+interface Pending {
+  item: HandoffItem;
+  /** Row in the durable store, so taking the take deletes it there too. */
+  key: string;
+}
+
 /**
  * Takes waiting for each section, oldest first. There is a queue per section
  * rather than one slot for the whole app: a send to a second section used to
  * overwrite the take still waiting for the first, dropping its audio with no
  * undo. Nothing is discarded now — a take nobody has taken yet stays queued.
  */
-const pending = new Map<HandoffTarget, HandoffItem[]>();
+const pending = new Map<HandoffTarget, Pending[]>();
+
+/** Row ids already handed over, so a late hydration cannot deliver them twice. */
+const consumed = new Set<string>();
+
+let store: HandoffStore = indexedDbHandoffStore;
+
+/** Replace the backing store; tests hand in an in-memory one. */
+export function setHandoffStore(next: HandoffStore | null): void {
+  store = next ?? indexedDbHandoffStore;
+}
+
+/**
+ * Storage work runs in order, never in parallel: a take sent and then taken
+ * straight away must not be written after its own delete and come back on the
+ * next reload.
+ */
+let writes: Promise<void> = Promise.resolve();
+
+function write(work: () => Promise<void>): void {
+  writes = writes.then(work, work).catch(() => {});
+}
+
+let hydration: Promise<void> | null = null;
+
+/**
+ * Put takes stored by an earlier run in front of anything queued since: they
+ * were sent first, so they are handed over first.
+ */
+function hydrate(): Promise<void> {
+  if (!hydration) {
+    hydration = store
+      .list()
+      .then((rows) => {
+        const byTarget = new Map<HandoffTarget, Pending[]>();
+        for (const row of rows) {
+          if (consumed.has(row.key)) continue;
+          const list = byTarget.get(row.target) ?? [];
+          list.push({ item: row.item, key: row.key });
+          byTarget.set(row.target, list);
+        }
+        for (const [target, list] of byTarget) {
+          pending.set(target, [...list, ...(pending.get(target) ?? [])]);
+        }
+      })
+      .catch(() => {
+        // Storage unavailable: the hand-off still works for this session.
+      });
+  }
+  return hydration;
+}
 
 /**
  * The sections that are open right now. A take sent to one of them is handed
@@ -98,9 +157,13 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
     return;
   }
 
+  const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const queue = pending.get(target);
-  if (queue) queue.push(item);
-  else pending.set(target, [item]);
+  if (queue) queue.push({ item, key });
+  else pending.set(target, [{ item, key }]);
+
+  const at = Date.now();
+  write(() => store.put({ key, target, at, item }));
 }
 
 /**
@@ -108,6 +171,10 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
  * is handed over at once, and one sent while it is open arrives without a
  * remount. Anything else still queued stays queued rather than being thrown
  * away, and is taken by a later visit.
+ *
+ * When this run has nothing queued yet, the store is asked first, so a take
+ * that was waiting when the app reloaded still arrives in the section it was
+ * sent to.
  */
 export function subscribeHandoff(target: HandoffTarget, listener: Listener): () => void {
   const listeners = open.get(target) ?? new Set<Listener>();
@@ -116,6 +183,14 @@ export function subscribeHandoff(target: HandoffTarget, listener: Listener): () 
 
   const queued = takeHandoff(target);
   if (queued) listener(queued);
+  else {
+    void hydrate().then(() => {
+      // Unmounted while the store was answering: the next mount takes it.
+      if (!listeners.has(listener)) return;
+      const stored = takeHandoff(target);
+      if (stored) listener(stored);
+    });
+  }
 
   return () => {
     listeners.delete(listener);
@@ -164,18 +239,24 @@ export function returnTake(to: HandoffSource, item: HandoffItem): void {
 
 /**
  * The oldest item queued for this section, if any. Reading it clears it, so the
- * next visit starts with whatever was sent after it, not the take again.
+ * next visit starts with whatever was sent after it, not the take again, and
+ * deletes its row so a reload cannot bring it back.
  */
 export function takeHandoff(target: HandoffTarget): HandoffItem | null {
   const queue = pending.get(target);
-  const item = queue?.shift();
-  if (!queue || !item) return null;
+  const entry = queue?.shift();
+  if (!queue || !entry) return null;
 
   if (queue.length === 0) pending.delete(target);
-  return item;
+  consumed.add(entry.key);
+  write(() => store.remove(entry.key));
+  return entry.item;
 }
 
-/** Drop anything queued. Used by tests between cases. */
+/** Drop anything queued in memory. Used by tests between cases. */
 export function clearHandoff(): void {
   pending.clear();
+  consumed.clear();
+  hydration = null;
+  writes = Promise.resolve();
 }

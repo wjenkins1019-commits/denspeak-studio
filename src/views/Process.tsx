@@ -7,10 +7,12 @@ import {
   applyEq,
   deleteCustomStyle,
   isCustomStyleId,
+  restoreCustomStyle,
   sameBands,
   saveCustomStyle,
   styleById,
   type EqBand,
+  type EqStyle,
 } from '../lib/eq';
 import { saveTake } from '../lib/library';
 import { SETTING_KEYS, useSetting } from '../lib/settings';
@@ -52,6 +54,20 @@ interface EqDraft {
   level: boolean;
 }
 
+/**
+ * One step back for the preset picker. Choosing another preset drops the bands
+ * you hand-edited, and deleting a saved preset removes it outright; both keep
+ * what they replaced here so the loss is a click to undo, not a session to redo.
+ */
+interface PresetUndo {
+  message: string;
+  styleId: string;
+  bands: EqBand[];
+  level: boolean;
+  /** The saved preset a delete removed, so undo can put it back on disk. */
+  deleted?: EqStyle;
+}
+
 export default function Process() {
   const [bankVoice, setBankVoice] = useState(VOICES[0]?.id ?? '');
   const [bankText, setBankText] = useState(BANK_TEXT);
@@ -64,6 +80,7 @@ export default function Process() {
   const [level, setLevel] = useState(() => draft?.level ?? styleById(styleId).level);
   const [newStyleName, setNewStyleName] = useState('');
   const [trimDb, setTrimDb] = useState(0);
+  const [undo, setUndo] = useState<PresetUndo | null>(null);
 
   const [source, setSource] = useState<Source | null>(null);
   const [analysis, setAnalysis] = useState<VoiceMetrics | null>(null);
@@ -100,6 +117,9 @@ export default function Process() {
 
   function chooseStyle(id: string) {
     const next = styleById(id);
+    setUndo(
+      edited ? { message: `Dropped your edits to “${style.label}”.`, styleId, bands, level } : null,
+    );
     setStyleId(id);
     setBands(next.bands.map((band) => ({ ...band })));
     setLevel(next.level);
@@ -110,28 +130,52 @@ export default function Process() {
     const created = saveCustomStyle({ label: newStyleName, bands, level });
     setStyleId(created.id);
     setNewStyleName('');
+    setUndo(null);
     setStatus(`Saved “${created.label}” as a preset.`);
   }
 
   function handleDeleteStyle() {
     if (!isCustomStyleId(styleId)) return;
-    const label = style.label;
+    const deleted = style;
+    const flat = styleById('flat');
+
     deleteCustomStyle(styleId);
-    chooseStyle('flat');
-    setStatus(`Deleted “${label}”.`);
+    setUndo({ message: `Deleted “${deleted.label}”.`, styleId, bands, level, deleted });
+    setStyleId('flat');
+    setBands(flat.bands.map((band) => ({ ...band })));
+    setLevel(flat.level);
+    setResult(null);
   }
 
+  /** Put back the preset, bands and level the last edit or delete replaced. */
+  function undoPreset() {
+    if (!undo) return;
+    if (undo.deleted) restoreCustomStyle(undo.deleted);
+
+    setStyleId(undo.styleId);
+    setBands(undo.bands.map((band) => ({ ...band })));
+    setLevel(undo.level);
+    setResult(null);
+    setUndo(null);
+    setStatus(`Restored “${styleById(undo.styleId).label}”.`);
+  }
+
+  // Editing after an undo was offered moves on: putting the old bands back now
+  // would throw away this edit instead.
   function updateBand(index: number, patch: Partial<EqBand>) {
     setBands((current) => current.map((band, i) => (i === index ? { ...band, ...patch } : band)));
+    setUndo(null);
     setResult(null);
   }
 
   function addBand() {
     setBands((current) => [...current, { type: 'peak', frequency: 1000, gainDb: 0, q: 1 }]);
+    setUndo(null);
   }
 
   function removeBand(index: number) {
     setBands((current) => current.filter((_, i) => i !== index));
+    setUndo(null);
     setResult(null);
   }
 
@@ -415,9 +459,19 @@ export default function Process() {
             onPresetChange={chooseStyle}
             onChangeBands={(next) => {
               setBands(next);
+              setUndo(null);
               setResult(null);
             }}
           />
+
+          {undo && (
+            <div className="row between eq-undo">
+              <small className="muted">{undo.message}</small>
+              <button className="btn ghost small" onClick={undoPreset}>
+                Undo
+              </button>
+            </div>
+          )}
 
           <div className="field">
             <span>Save as preset</span>

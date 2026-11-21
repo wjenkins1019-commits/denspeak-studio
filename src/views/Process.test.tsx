@@ -4,6 +4,10 @@
 // Rendered under StrictMode, as the app is: delivery rests on a subscription
 // effect, so a take must still land exactly once when React mounts, cleans up
 // and mounts again. The TTS engine is mocked; an arrival never renders speech.
+//
+// The preset tests below cover the other way Shape can lose work: hand-edited
+// bands are dropped when a different preset is chosen, and deleting a saved
+// preset removes it outright. Both are one click from coming back.
 import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +23,8 @@ const originalRevokeObjectURL = URL.revokeObjectURL;
 
 beforeEach(() => {
   clearHandoff();
+  window.localStorage.clear();
+  window.history.replaceState(null, '', '#/process');
   URL.createObjectURL = vi.fn(() => 'blob:mock-url') as unknown as typeof URL.createObjectURL;
   URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL;
 });
@@ -28,7 +34,17 @@ afterEach(() => {
   clearHandoff();
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
+  window.history.replaceState(null, '', window.location.pathname);
 });
+
+/** The preset picker's current value, and the rows it offers. */
+function presetPicker(): HTMLSelectElement {
+  return screen.getByLabelText('EQ preset') as HTMLSelectElement;
+}
+
+function bandRows(): number {
+  return screen.getAllByTitle('Frequency (Hz)').length;
+}
 
 describe('Shape hand-off', () => {
   it('takes a second take sent while it is open, and hands the first back', () => {
@@ -53,5 +69,60 @@ describe('Shape hand-off', () => {
 
     expect(screen.getAllByText('First sample loaded. Shape it, then apply.')).toHaveLength(1);
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+  });
+});
+
+describe('Shape preset undo', () => {
+  it('gives back the hand-edited bands that choosing another preset dropped', () => {
+    render(
+      <StrictMode>
+        <Process />
+      </StrictMode>,
+    );
+
+    expect(presetPicker().value).toBe('voice-clarity');
+    const untouched = bandRows();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add band' }));
+    expect(bandRows()).toBe(untouched + 1);
+
+    fireEvent.change(presetPicker(), { target: { value: 'podcast' } });
+
+    expect(presetPicker().value).toBe('podcast');
+    // The edit is gone from the graph, but not from the session.
+    expect(screen.getByText(/Dropped your edits to “Clarity”/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect(presetPicker().value).toBe('voice-clarity');
+    expect(bandRows()).toBe(untouched + 1);
+    expect(screen.queryByText(/Dropped your edits/)).toBeNull();
+  });
+
+  it('puts a deleted preset back where it was', () => {
+    render(
+      <StrictMode>
+        <Process />
+      </StrictMode>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Name this preset'), {
+      target: { value: 'Mine' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save preset' }));
+
+    const saved = presetPicker().value;
+    expect(saved.startsWith('custom:')).toBe(true);
+    expect([...presetPicker().options].some((option) => option.text === 'Mine')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete preset' }));
+
+    expect([...presetPicker().options].some((option) => option.text === 'Mine')).toBe(false);
+    expect(screen.getByText(/Deleted “Mine”/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect([...presetPicker().options].some((option) => option.text === 'Mine')).toBe(true);
+    expect(presetPicker().value).toBe(saved);
   });
 });

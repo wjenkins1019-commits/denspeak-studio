@@ -758,6 +758,14 @@ input[type='file']::file-selector-button:hover {
   line-height: 1;
 }
 
+/* One click back for a preset that was switched away from or deleted. */
+.eq-undo {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--hint-bg);
+}
+
 .eq-graph {
   display: block;
   width: 100%;
