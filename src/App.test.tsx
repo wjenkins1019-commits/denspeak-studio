@@ -223,6 +223,52 @@ describe('hand-off navigation', () => {
     expect(screen.queryByRole('button', { name: /take waiting for Song/ })).toBeNull();
   });
 
+  it('keeps focus inside the panel as rows are discarded and cleared', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
+    });
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
+    expect(document.activeElement).toBe(heading);
+
+    // The row the click lands on is gone with the click, so a pointer has
+    // already put focus on that button's way out.
+    const first = screen.getByRole('button', { name: 'Discard First take' });
+    first.focus();
+    await act(async () => {
+      fireEvent.click(first);
+    });
+
+    // Focus follows the list rather than dropping to the page behind the dialog:
+    // it is on the take that took the discarded row's place.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard Second take' }));
+    expect(document.activeElement).not.toBe(document.body);
+
+    const clear = screen.getByRole('button', { name: 'Clear all 1' });
+    clear.focus();
+    await act(async () => {
+      fireEvent.click(clear);
+    });
+
+    // Nothing left to land on: the heading is where the panel opened, and the
+    // line under it says the queue is empty.
+    expect(screen.getByText('Nothing queued now.')).toBeTruthy();
+    expect(document.activeElement).toBe(heading);
+  });
+
   it('leaves the on-screen section’s count to its notice and keeps the others', async () => {
     render(
       <StrictMode>

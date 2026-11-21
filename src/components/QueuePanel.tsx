@@ -30,6 +30,11 @@ export function QueuePanel({
 }) {
   const panel = useRef<HTMLElement | null>(null);
   const heading = useRef<HTMLHeadingElement | null>(null);
+  const list = useRef<HTMLUListElement | null>(null);
+  // The row index that had focus when a removal was asked for, with the queue as
+  // it was then, so focus only moves if the list actually changed.
+  const removal = useRef<{ index: number; keys: string } | null>(null);
+  const keys = takes.map((take) => take.key).join('|');
 
   useEffect(() => {
     heading.current?.focus();
@@ -63,6 +68,24 @@ export function QueuePanel({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // A row's Discard button leaves with its row, and a clear takes every row at
+  // once, so focus would otherwise fall back to the page behind the dialog. It
+  // goes to the take that took the row's place, else the last take left, and
+  // with the queue empty to the heading: that reads the section the panel is
+  // for and sits above the line saying nothing is queued now.
+  useEffect(() => {
+    const asked = removal.current;
+    // The store would not let the row go, so the list still reads the same: no
+    // focus was lost, and it must not be pulled away from wherever the reader
+    // has moved on to since.
+    if (!asked || asked.keys === keys) return;
+    removal.current = null;
+
+    const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>('[data-discard]') ?? [])];
+    const next = rows[Math.min(asked.index, rows.length - 1)];
+    (next ?? heading.current)?.focus();
+  }, [keys]);
 
   return (
     <div className="queue-scrim" onMouseDown={onClose}>
@@ -99,8 +122,8 @@ export function QueuePanel({
           </p>
         )}
 
-        <ul className="queue-list">
-          {takes.map((take) => (
+        <ul className="queue-list" ref={list}>
+          {takes.map((take, index) => (
             <li key={take.key}>
               <div className="queue-take">
                 <strong>{take.name}</strong>
@@ -111,8 +134,12 @@ export function QueuePanel({
               </div>
               <button
                 className="btn ghost small"
+                data-discard
                 aria-label={`Discard ${take.name}`}
-                onClick={() => onDiscard(take.key)}
+                onClick={() => {
+                  removal.current = { index, keys };
+                  onDiscard(take.key);
+                }}
               >
                 Discard
               </button>
@@ -125,7 +152,13 @@ export function QueuePanel({
             Open {label}
           </button>
           {takes.length > 0 && (
-            <button className="btn ghost small danger" onClick={onClear}>
+            <button
+              className="btn ghost small danger"
+              onClick={() => {
+                removal.current = { index: 0, keys };
+                onClear();
+              }}
+            >
               Clear all {takes.length}
             </button>
           )}
