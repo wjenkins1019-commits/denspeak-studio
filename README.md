@@ -108,6 +108,7 @@ version check and does not create or touch any Release.
 | `src/views/Voices.tsx` | Browse/search the catalog, preview, pick, remove models |
 | `src/views/Settings.tsx` | Defaults, light/dark UI, cached models, pronunciations |
 | `src/components/EqPanel.tsx` | EQ preset picker plus response curve, shared by three views |
+| `src/components/SendTakeRow.tsx` | "Send this take to" buttons under a finished result |
 | `src/lib/tts.ts` | vits-web wrapper (`predict`, `stored`, `remove`, `flush`) |
 | `src/lib/audio.ts` | Phase vocoder, spectral shaping, WAV encode, decode to mono |
 | `src/lib/eq.ts` | EQ presets, biquad chain and the response curve they draw |

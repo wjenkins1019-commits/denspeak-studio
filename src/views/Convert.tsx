@@ -6,6 +6,7 @@ import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
+import { SendTakeRow } from '../components/SendTakeRow';
 import { takeHandoff } from '../lib/handoff';
 import { EqPanel } from '../components/EqPanel';
 
@@ -309,6 +310,7 @@ export default function Convert() {
           <>
             <Player blob={take.blob} name={take.name} takeId={take.id} />
             <p className="status">Converted and saved to your library.</p>
+            <SendTakeRow name={take.name} blob={take.blob} />
           </>
         )}
       </div>

@@ -19,6 +19,7 @@ import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
+import { SendTakeRow } from '../components/SendTakeRow';
 import { takeHandoff } from '../lib/handoff';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
@@ -519,6 +520,7 @@ export default function Process() {
                 rawLabel="Raw"
                 shapedLabel="Shaped"
               />
+              <SendTakeRow name={result.label} blob={result.blob} />
             </div>
           )}
         </div>

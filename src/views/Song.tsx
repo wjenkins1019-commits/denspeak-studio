@@ -9,6 +9,7 @@ import { saveTake, type Take } from '../lib/library';
 import { titleFromScript } from '../lib/format';
 import { DEFAULT_VOICE, SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
+import { SendTakeRow } from '../components/SendTakeRow';
 import { takeHandoff } from '../lib/handoff';
 
 const LYRICS_SAMPLE = `I write it once, the beat decides the pace
@@ -321,6 +322,7 @@ export default function Song() {
           {mix && (
             <div className="stack">
               <Player blob={mix.blob} name={mix.take.name} isSong />
+              <SendTakeRow name={mix.take.name} blob={mix.blob} />
               <div className="take-list">
                 {mix.result.lines.map((line, index) => (
                   <div className="take-row" key={`${line.text}-${index}`}>
