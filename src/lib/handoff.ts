@@ -71,13 +71,18 @@ export function subscribeHandoff(target: HandoffTarget, listener: Listener): () 
 }
 
 /**
- * Queue the take and open its section. The app is hash-routed, so setting the
- * hash mounts that section, which takes the item on mount. Outside the browser
- * (unit tests) only the queue is touched.
+ * Queue the take and open its section. The route is replaced rather than pushed:
+ * assigning a hash adds a history entry, and Back would then reopen the section
+ * the user came from with its take already consumed — an empty page that looks
+ * like undo. Replacing leaves Back pointing where they actually came from.
+ * replaceState fires no hashchange, so the router is told by hand.
  */
 export function sendTake(target: HandoffTarget, item: HandoffItem): void {
   sendHandoff(target, item);
-  if (typeof window !== 'undefined') window.location.hash = `#/${target}`;
+  if (typeof window === 'undefined') return;
+
+  window.history.replaceState(null, '', `#/${target}`);
+  window.dispatchEvent(new Event('hashchange'));
 }
 
 /**

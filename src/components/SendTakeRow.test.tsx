@@ -3,7 +3,7 @@
 // the take to an open section rather than queueing it for a remount that the
 // unchanged hash would never trigger.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SendTakeRow } from './SendTakeRow';
 import { clearHandoff, subscribeHandoff, takeHandoff, type HandoffItem } from '../lib/handoff';
 
@@ -47,13 +47,21 @@ describe('SendTakeRow', () => {
     expect(takeHandoff('process')).toBeNull();
   });
 
-  it('queues for a section that is not open and opens it', () => {
+  it('queues for a section that is not open, and opens it without a history entry', () => {
     window.location.hash = '#/convert';
+    const depth = window.history.length;
+    const onHashChange = vi.fn();
+    window.addEventListener('hashchange', onHashChange);
 
     render(<SendTakeRow {...take} />);
     fireEvent.click(screen.getByRole('button', { name: 'Beat' }));
+    window.removeEventListener('hashchange', onHashChange);
 
     expect(window.location.hash).toBe('#/song');
+    // Replacing, not pushing: Back must not reopen the spent section as if undo.
+    expect(window.history.length).toBe(depth);
+    // replaceState fires no hashchange, so the router is told by hand.
+    expect(onHashChange).toHaveBeenCalledTimes(1);
     expect(takeHandoff('song')?.name).toBe('A take');
   });
 });
