@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_THEME, DEFAULT_VOICE, SETTING_KEYS, useSetting, type Theme } from './lib/settings';
 import { cancelJob, getActiveJob, useRenderQueue } from './lib/renderQueue';
+import { isHandoffRoute } from './lib/handoff';
+import { usePendingCounts } from './lib/useHandoffTake';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
 import Studio from './views/Studio';
@@ -43,6 +45,8 @@ function readRoute(): Route {
 export default function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const queueTick = useRenderQueue();
+  // Takes waiting per section, so the rail can say where one is queued.
+  const waitingBySection = usePendingCounts();
   const activeJob = useMemo(() => getActiveJob(), [queueTick]);
   const [voiceId, setVoiceId] = useSetting<string>(SETTING_KEYS.voice, DEFAULT_VOICE);
   const [speed, setSpeed] = useSetting<number>(SETTING_KEYS.speed, 1);
@@ -89,16 +93,32 @@ export default function App() {
         </div>
 
         <nav className="nav">
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              className={route === item.id ? 'nav-item active' : 'nav-item'}
-              onClick={() => navigate(item.id)}
-            >
-              <span>{item.label}</span>
-              <small>{item.hint}</small>
-            </button>
-          ))}
+          {NAV.map((item) => {
+            const waiting = isHandoffRoute(item.id) ? (waitingBySection[item.id] ?? 0) : 0;
+
+            return (
+              <button
+                key={item.id}
+                className={route === item.id ? 'nav-item active' : 'nav-item'}
+                onClick={() => navigate(item.id)}
+              >
+                <span className="nav-label">
+                  {item.label}
+                  {waiting > 0 && (
+                    <>
+                      <span className="nav-count" aria-hidden="true">
+                        {waiting}
+                      </span>
+                      <span className="sr-only">
+                        , {waiting === 1 ? '1 take' : `${waiting} takes`} waiting
+                      </span>
+                    </>
+                  )}
+                </span>
+                <small>{item.hint}</small>
+              </button>
+            );
+          })}
         </nav>
 
         {activeJob && (

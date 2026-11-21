@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  hydrateHandoff,
   pendingCount,
+  pendingCounts,
   subscribeHandoff,
+  subscribeQueues,
   takeHandoff,
   type HandoffItem,
   type HandoffTarget,
@@ -82,4 +85,31 @@ export function useHandoffTake<S>(
       setArrival(null);
     },
   };
+}
+
+/**
+ * What is queued for every section, for the rail: a take waiting in a section
+ * nobody has opened can be seen without opening it. Takes an earlier run left
+ * on disk are counted from the start rather than on that section's first visit.
+ */
+export function usePendingCounts(): Partial<Record<HandoffTarget, number>> {
+  const [counts, setCounts] = useState<Partial<Record<HandoffTarget, number>>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const sync = () => {
+      if (alive) setCounts(pendingCounts());
+    };
+
+    const stop = subscribeQueues(sync);
+    sync();
+    void hydrateHandoff().then(sync);
+
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, []);
+
+  return counts;
 }

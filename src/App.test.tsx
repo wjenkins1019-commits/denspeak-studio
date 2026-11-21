@@ -8,7 +8,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { clearHandoff, sendTake } from './lib/handoff';
+import { clearHandoff, sendHandoff, sendTake } from './lib/handoff';
 
 vi.mock('./lib/tts', () => ({
   renderSpeech: vi.fn(async () => new Blob(['tts'])),
@@ -83,6 +83,35 @@ describe('hand-off navigation', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
     expect(window.location.hash).toBe('#/song');
     expect(screen.queryByRole('heading', { level: 1, name: 'Change a recording' })).toBeNull();
+  });
+
+  it('counts the takes waiting for a section that is not open', async () => {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    // Let the rail's first read of the store settle, so the count below can
+    // only come from being told about the send.
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /take waiting/ })).toBeNull();
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+    });
+
+    // The rail says where it is waiting, without opening Song to find out.
+    const song = screen.getByRole('button', { name: /1 take waiting/ });
+    expect(song.textContent).toContain('Song');
+
+    await act(async () => {
+      fireEvent.click(song);
+    });
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' })).toBeTruthy();
+    // Taken now, so there is nothing left to count.
+    expect(screen.queryByRole('button', { name: /take waiting/ })).toBeNull();
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {

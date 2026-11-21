@@ -87,6 +87,26 @@ export const HANDOFF_MAX_STORED = 8;
 
 type Listener = (item: HandoffItem) => void;
 
+/** Anything outside a section that watches the queues, namely the rail. */
+type QueueListener = () => void;
+
+const queueListeners = new Set<QueueListener>();
+
+/**
+ * Told after every change to what is queued. Sections use `subscribeHandoff`;
+ * this is for the rail, which counts takes for sections that are not open.
+ */
+export function subscribeQueues(listener: QueueListener): () => void {
+  queueListeners.add(listener);
+  return () => {
+    queueListeners.delete(listener);
+  };
+}
+
+function queuesChanged(): void {
+  for (const listener of [...queueListeners]) listener();
+}
+
 interface Pending {
   item: HandoffItem;
   /** Row in the durable store, so taking the take deletes it there too. */
@@ -189,6 +209,8 @@ function hydrate(): Promise<void> {
           pending.set(target, [...list, ...(pending.get(target) ?? [])]);
         }
 
+        if (byTarget.size > 0) queuesChanged();
+
         // Stale, over-limit and already-taken rows are not coming back.
         void pruneStored(rows);
       })
@@ -219,6 +241,8 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   const queue = pending.get(target);
   if (queue) queue.push({ item, key });
   else pending.set(target, [{ item, key }]);
+
+  queuesChanged();
 
   // Written, then pruned: a section nobody opens must not collect takes on disk
   // for ever.
@@ -302,6 +326,28 @@ export function pendingCount(target: HandoffTarget): number {
   return pending.get(target)?.length ?? 0;
 }
 
+/** How many takes are waiting for each section; a section with none is left out. */
+export function pendingCounts(): Partial<Record<HandoffTarget, number>> {
+  const counts: Partial<Record<HandoffTarget, number>> = {};
+  for (const [target, queue] of pending) {
+    if (queue.length > 0) counts[target] = queue.length;
+  }
+  return counts;
+}
+
+/**
+ * Read what an earlier run left on disk now rather than on the first visit to a
+ * section: the rail counts takes for a section nobody has opened yet.
+ */
+export function hydrateHandoff(): Promise<void> {
+  return hydrate();
+}
+
+/** Whether a route names a section that can be handed a take. */
+export function isHandoffRoute(route: string): route is HandoffTarget {
+  return HANDOFF_TARGETS.some((entry) => entry.target === route);
+}
+
 /**
  * The oldest item queued for this section, if any. Reading it clears it, so the
  * next visit starts with whatever was sent after it, not the take again, and
@@ -315,6 +361,7 @@ export function takeHandoff(target: HandoffTarget): HandoffItem | null {
   if (queue.length === 0) pending.delete(target);
   consumed.add(entry.key);
   write(() => store.remove(entry.key));
+  queuesChanged();
   return entry.item;
 }
 
@@ -324,4 +371,5 @@ export function clearHandoff(): void {
   consumed.clear();
   hydration = null;
   writes = Promise.resolve();
+  queuesChanged();
 }

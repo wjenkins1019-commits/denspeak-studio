@@ -10,11 +10,15 @@ import {
   setHandoffStore,
   subscribeHandoff,
   takeHandoff,
+  hydrateHandoff,
   pendingCount,
+  pendingCounts,
+  subscribeQueues,
   HANDOFF_MAX_AGE_MS,
   HANDOFF_MAX_STORED,
   HANDOFF_TARGETS,
   type HandoffItem,
+  type HandoffTarget,
 } from './handoff';
 import type { HandoffRecord, HandoffStore } from './handoffStore';
 
@@ -299,5 +303,41 @@ describe('durable queue', () => {
     expect(names[names.length - 1]).toBe(`Take ${HANDOFF_MAX_STORED + 2}`);
     // Only storage is bounded: the session still holds every take it queued.
     expect(pendingCount('convert')).toBe(HANDOFF_MAX_STORED + 3);
+  });
+
+  it('counts the takes waiting for each section', () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    sendHandoff('song', { ...item, name: 'Beat take' });
+
+    expect(pendingCounts()).toEqual({ convert: 2, song: 1 });
+
+    takeHandoff('convert');
+    expect(pendingCounts()).toEqual({ convert: 1, song: 1 });
+  });
+
+  it('tells the rail after every change, so its count never lags', () => {
+    const seen: Array<Partial<Record<HandoffTarget, number>>> = [];
+    const stop = subscribeQueues(() => seen.push(pendingCounts()));
+
+    sendHandoff('song', item);
+    takeHandoff('song');
+    stop();
+
+    expect(seen).toEqual([{ song: 1 }, {}]);
+  });
+
+  it('counts takes an earlier run left before that section is opened', async () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+
+    // A reload: the queues are empty until the store is asked.
+    clearHandoff();
+    expect(pendingCounts()).toEqual({});
+
+    await hydrateHandoff();
+
+    expect(pendingCounts()).toEqual({ convert: 2 });
   });
 });
