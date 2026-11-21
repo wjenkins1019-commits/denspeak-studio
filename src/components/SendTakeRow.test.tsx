@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// The strip offers every section, including the one on screen: handoff.ts hands
-// the take to an open section rather than queueing it for a remount that the
-// unchanged hash would never trigger.
+// The strip never offers the section the take came from: sending a take to
+// where it already is only reloads it behind a notice that announces an
+// arrival from somewhere else.
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SendTakeRow } from './SendTakeRow';
@@ -16,9 +16,19 @@ afterEach(() => {
 });
 
 describe('SendTakeRow', () => {
-  it('offers every section, including the one already on screen', () => {
+  it('leaves out the section the take came from', () => {
     window.history.replaceState(null, '', '#/process');
 
+    render(<SendTakeRow {...take} from="process" />);
+
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Convert',
+      'Transcribe',
+      'Beat',
+    ]);
+  });
+
+  it('still offers every section to a take from Studio, which receives none', () => {
     render(<SendTakeRow {...take} />);
 
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([

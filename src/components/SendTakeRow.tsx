@@ -3,16 +3,16 @@ import { HANDOFF_TARGETS, sendTake, type HandoffItem, type HandoffSource } from 
 /**
  * "Send this take to" strip under a finished result: hands the audio to
  * Convert, Transcribe, Shape or Song without an export/import round-trip.
- * The section you are already in is offered too — the store delivers there
- * directly instead of queueing for a remount. `from` is this section, carried
- * with the take so the receiver can offer a way back to it.
+ * The section you are already in is left out: sending a take to where it
+ * already is only reloads it behind a notice announcing an arrival from
+ * somewhere else. `from` is this section, and names the one to drop.
  */
 export function SendTakeRow({ name, blob, duration, captions, from }: HandoffItem & { from: HandoffSource }) {
   return (
     <div className="row between">
       <small className="muted">Send this take to</small>
       <div className="row">
-        {HANDOFF_TARGETS.map((entry) => (
+        {HANDOFF_TARGETS.filter((entry) => entry.target !== from).map((entry) => (
           <button
             key={entry.target}
             className="btn ghost small"
