@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  claimHandoff,
   hydrateHandoff,
   pendingCount,
   pendingCounts,
   subscribeHandoff,
   subscribeQueues,
-  takeHandoff,
   type HandoffItem,
   type HandoffTarget,
 } from './handoff';
@@ -53,6 +53,9 @@ export function useHandoffTake<S>(
 ) {
   const [arrival, setArrival] = useState<HandoffArrival<S> | null>(null);
   const [waiting, setWaiting] = useState(0);
+  // A take whose row would not delete stays queued. The section says so and
+  // offers another try rather than sitting empty as if nothing was sent.
+  const [failed, setFailed] = useState(false);
 
   // Subscribed once; the view's latest values are read through the ref, so a
   // new callback identity does not re-subscribe and double-take.
@@ -70,13 +73,29 @@ export function useHandoffTake<S>(
     const before = latest.current.current;
     latest.current.apply(item);
     setArrival({ item, before });
+    setFailed(false);
     setWaiting(pendingCount(target));
+  }
+
+  /**
+   * Ask for the next queued take. A failed attempt is reported rather than
+   * swallowed: the take is still queued, one retry away.
+   */
+  function takeNext() {
+    void claimHandoff(target).then((claim) => {
+      if (claim.status === 'taken') deliver(claim.item);
+      else if (claim.status === 'failed') setFailed(true);
+      else {
+        setFailed(false);
+        setWaiting(pendingCount(target));
+      }
+    });
   }
 
   useEffect(() => {
     const take = !asked.current;
     asked.current = true;
-    return subscribeHandoff(target, deliver, { take });
+    return subscribeHandoff(target, deliver, { take, onFailed: () => setFailed(true) });
   }, [target]);
 
   // A queued take can be discarded from the rail while this section is open;
@@ -88,13 +107,12 @@ export function useHandoffTake<S>(
     arrival,
     /** How many takes are still waiting behind the one on screen. */
     waiting,
+    /** Whether a queued take could not be opened, and is still waiting. */
+    failed,
     /** Take the next queued take without leaving the section. */
-    next: () => {
-      void takeHandoff(target).then((item) => {
-        if (item) deliver(item);
-        else setWaiting(pendingCount(target));
-      });
-    },
+    next: takeNext,
+    /** Try the take that failed to open again. */
+    retry: takeNext,
     /** Put back what the section had before the arrival, and close the notice. */
     keep: () => {
       if (arrival && arrival.before !== null) latest.current.restore(arrival.before);

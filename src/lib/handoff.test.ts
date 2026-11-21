@@ -3,6 +3,7 @@
 // to a second section before the first is opened must not drop the first take.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  claimHandoff,
   clearHandoff,
   currentSection,
   returnTake,
@@ -146,24 +147,24 @@ describe('handoff', () => {
     sendHandoff('convert', { ...item, name: 'Second take' });
     const [oldest] = queuedTakes('convert');
 
-    expect(discardHandoff('convert', oldest.key)).toBe(true);
+    expect(await discardHandoff('convert', oldest.key)).toBe(true);
 
     expect(queuedTakes('convert').map((take) => take.name)).toEqual(['Second take']);
     expect(pendingCount('convert')).toBe(1);
     // A key that is gone is not silently discarded twice.
-    expect(discardHandoff('convert', oldest.key)).toBe(false);
+    expect(await discardHandoff('convert', oldest.key)).toBe(false);
     expect(await takeHandoff('convert')).toMatchObject({ name: 'Second take' });
   });
 
-  it('clears a section’s queue without touching another section', () => {
+  it('clears a section’s queue without touching another section', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
     sendHandoff('song', { ...item, name: 'Beat take' });
 
-    expect(discardHandoffQueue('convert')).toBe(2);
+    expect(await discardHandoffQueue('convert')).toBe(2);
     expect(pendingCount('convert')).toBe(0);
     expect(pendingCount('song')).toBe(1);
-    expect(discardHandoffQueue('convert')).toBe(0);
+    expect(await discardHandoffQueue('convert')).toBe(0);
   });
 
   it('keeps a section out of another section’s take', async () => {
@@ -279,7 +280,7 @@ describe('durable queue', () => {
     await vi.waitFor(() => expect(store.rows.size).toBe(1));
 
     const [queued] = queuedTakes('convert');
-    discardHandoff('convert', queued.key);
+    expect(await discardHandoff('convert', queued.key)).toBe(true);
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
 
     // A reload starts with nothing, not with the discarded audio.
@@ -297,13 +298,108 @@ describe('durable queue', () => {
     sendHandoff('convert', { ...item, name: 'Second take' });
     await vi.waitFor(() => expect(store.rows.size).toBe(2));
 
-    expect(discardHandoffQueue('convert')).toBe(2);
+    expect(await discardHandoffQueue('convert')).toBe(2);
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
 
     clearHandoff();
     await hydrateHandoff();
 
     expect(queuedTakes('convert')).toEqual([]);
+  });
+
+  it('keeps a discarded take queued when its row will not go', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    const [queued] = queuedTakes('convert');
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+
+    // Not discarded: the row would bring it back next run, so it stays visible.
+    expect(await discardHandoff('convert', queued.key)).toBe(false);
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['A take']);
+    expect(store.rows.size).toBe(1);
+
+    store.remove = remove;
+    expect(await discardHandoff('convert', queued.key)).toBe(true);
+    expect(pendingCount('convert')).toBe(0);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+
+    // Nothing left for a reload to bring back.
+    clearHandoff();
+    await hydrateHandoff();
+    expect(queuedTakes('convert')).toEqual([]);
+  });
+
+  it('clears only the takes whose rows went', async () => {
+    sendHandoff('convert', item);
+    sendHandoff('convert', { ...item, name: 'Second take' });
+    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+
+    const [first] = queuedTakes('convert');
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async (key: string) => {
+      if (key === first.key) throw new Error('delete failed');
+      await remove(key);
+    });
+
+    expect(await discardHandoffQueue('convert')).toBe(1);
+    // The one that would not go is still queued and still stored, so the clear
+    // cannot report it gone and let it arrive on the next run.
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['A take']);
+    expect(store.rows.size).toBe(1);
+
+    store.remove = remove;
+    expect(await discardHandoffQueue('convert')).toBe(1);
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
+  it('reports a take that would not open, and opens it on another try', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+
+    expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+    // Still queued, so the section can say so and offer the retry.
+    expect(pendingCount('convert')).toBe(1);
+
+    store.remove = remove;
+    expect(await claimHandoff('convert')).toEqual({ status: 'taken', item });
+    expect(await claimHandoff('convert')).toEqual({ status: 'empty' });
+    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+  });
+
+  it('tells a section its take failed to open, and not once it opens', async () => {
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+
+    const failed = vi.fn();
+    const seen: HandoffItem[] = [];
+    const stop = subscribeHandoff('convert', (handed) => seen.push(handed), { onFailed: failed });
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    // Nothing applied: the row survived, so showing it would replay it.
+    expect(seen).toEqual([]);
+    stop();
+
+    store.remove = remove;
+    const failedAgain = vi.fn();
+    const stopNext = subscribeHandoff('convert', (handed) => seen.push(handed), {
+      onFailed: failedAgain,
+    });
+    await vi.waitFor(() => expect(seen).toEqual([item]));
+    expect(failedAgain).not.toHaveBeenCalled();
+    stopNext();
   });
 
   it('stores nothing for a section that is open, which takes the take directly', async () => {

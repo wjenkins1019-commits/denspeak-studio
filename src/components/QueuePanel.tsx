@@ -13,6 +13,7 @@ import { formatDuration } from '../lib/format';
 export function QueuePanel({
   label,
   takes,
+  note,
   onDiscard,
   onClear,
   onOpen,
@@ -20,6 +21,8 @@ export function QueuePanel({
 }: {
   label: string;
   takes: QueuedTake[];
+  /** Why a take that should have gone is still listed. */
+  note?: string | null;
   onDiscard: (key: string) => void;
   onClear: () => void;
   onOpen: () => void;
@@ -89,6 +92,12 @@ export function QueuePanel({
             Close
           </button>
         </div>
+
+        {note && (
+          <p className="muted" role="status">
+            {note}
+          </p>
+        )}
 
         <ul className="queue-list">
           {takes.map((take) => (

@@ -70,6 +70,8 @@ export default function App() {
   const [theme, setTheme] = useSetting<Theme>(SETTING_KEYS.theme, DEFAULT_THEME);
   // The section whose queue the rail count opened, if any.
   const [queuePanel, setQueuePanel] = useState<HandoffTarget | null>(null);
+  // Why a take the panel offered to throw away is still listed.
+  const [queueNote, setQueueNote] = useState<string | null>(null);
   const queueReturn = useRef<HTMLButtonElement | null>(null);
   // One live region speaks for the rail; it only carries increases.
   const [announcement, setAnnouncement] = useState('');
@@ -115,12 +117,14 @@ export default function App() {
 
   const openQueue = useCallback((target: HandoffTarget, trigger: HTMLButtonElement) => {
     queueReturn.current = trigger;
+    setQueueNote(null);
     setQueuePanel(target);
   }, []);
 
   const closeQueue = useCallback(() => {
     const target = queuePanel;
     const trigger = queueReturn.current;
+    setQueueNote(null);
     setQueuePanel(null);
     // Back to the count that opened it; clearing a queue removes that control,
     // so the section's own rail entry is the fallback.
@@ -131,14 +135,33 @@ export default function App() {
   }, [queuePanel]);
 
   const discardQueued = useCallback(
-    (key: string) => {
-      if (queuePanel) discardHandoff(queuePanel, key);
+    async (key: string) => {
+      if (!queuePanel) return;
+      setQueueNote(null);
+      const name = queuedTakes(queuePanel).find((take) => take.key === key)?.name;
+      // The row goes first; a take whose delete failed stays queued, and saying
+      // so beats a Discard button that looks as if it did nothing.
+      if (await discardHandoff(queuePanel, key)) return;
+      setQueueNote(
+        `Couldn’t remove ${name ? `“${name}”` : 'that take'} — its saved copy is still there, so it is still waiting.`,
+      );
     },
     [queuePanel],
   );
 
-  const clearQueued = useCallback(() => {
-    if (queuePanel) discardHandoffQueue(queuePanel);
+  const clearQueued = useCallback(async () => {
+    if (!queuePanel) return;
+    const queued = queuedTakes(queuePanel).length;
+    setQueueNote(null);
+    const gone = await discardHandoffQueue(queuePanel);
+    if (gone >= queued) return;
+
+    const left = queued - gone;
+    setQueueNote(
+      left === 1
+        ? 'Couldn’t remove 1 take — its saved copy is still there, so it is still waiting.'
+        : `Couldn’t remove ${left} takes — their saved copies are still there, so they are still waiting.`,
+    );
   }, [queuePanel]);
 
   const openQueuedSection = useCallback(() => {
@@ -264,6 +287,7 @@ export default function App() {
         <QueuePanel
           label={NAV.find((item) => item.id === queuePanel)?.label ?? 'this section'}
           takes={queuedTakes(queuePanel)}
+          note={queueNote}
           onDiscard={discardQueued}
           onClear={clearQueued}
           onOpen={openQueuedSection}

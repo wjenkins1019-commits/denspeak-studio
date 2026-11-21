@@ -56,7 +56,7 @@ import { BookImport } from '../components/BookImport';
 import { EqPanel } from '../components/EqPanel';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
+import { HandoffFailed, HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 import type { HandoffItem } from '../lib/handoff';
 
@@ -982,7 +982,9 @@ export default function Studio({ voiceId, onVoiceChange, speed, onSpeedChange }:
             />
           )}
 
-          {handoff.arrival ? (
+          {handoff.failed ? (
+            <HandoffFailed onRetry={handoff.retry} />
+          ) : handoff.arrival ? (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}

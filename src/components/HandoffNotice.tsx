@@ -83,3 +83,21 @@ export function WaitingTakes({ waiting, onNext }: { waiting: number; onNext: () 
     </div>
   );
 }
+
+/**
+ * A take that is still queued but could not be opened: its stored row would not
+ * delete, and showing it anyway would bring it back on the next run. Saying so,
+ * with another try, beats an empty section that looks like a lost take.
+ */
+export function HandoffFailed({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="row between" role="status" aria-atomic="true">
+      <small className="muted">
+        Couldn’t open your take — its saved copy wouldn’t clear, so it is still waiting.
+      </small>
+      <button className="btn ghost small" onClick={onRetry}>
+        Try again
+      </button>
+    </div>
+  );
+}

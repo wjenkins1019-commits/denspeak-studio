@@ -22,7 +22,7 @@ import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
+import { HandoffFailed, HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
@@ -390,7 +390,9 @@ export default function Process() {
           </div>
           <LiveLevelMeter stream={meterStream} />
 
-          {handoff.arrival ? (
+          {handoff.failed ? (
+            <HandoffFailed onRetry={handoff.retry} />
+          ) : handoff.arrival ? (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}

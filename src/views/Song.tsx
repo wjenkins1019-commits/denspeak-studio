@@ -10,7 +10,7 @@ import { titleFromScript } from '../lib/format';
 import { DEFAULT_VOICE, SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
+import { HandoffFailed, HandoffNotice, WaitingTakes } from '../components/HandoffNotice';
 import { useHandoffFocus, useHandoffTake } from '../lib/useHandoffTake';
 
 const LYRICS_SAMPLE = `I write it once, the beat decides the pace
@@ -250,7 +250,9 @@ export default function Song() {
             </label>
           </div>
 
-          {handoff.arrival ? (
+          {handoff.failed ? (
+            <HandoffFailed onRetry={handoff.retry} />
+          ) : handoff.arrival ? (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}

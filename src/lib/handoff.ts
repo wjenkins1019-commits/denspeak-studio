@@ -265,11 +265,14 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
  * `take: false` joins without taking a queued take, for a listener that only
  * has to stay open — the second subscription React's StrictMode runs in
  * development, after the first has already been handed its take.
+ *
+ * `onFailed` is told when a take could not be opened because its stored row
+ * would not delete. It is still queued, so the section can offer another try.
  */
 export function subscribeHandoff(
   target: HandoffTarget,
   listener: Listener,
-  options: { take?: boolean } = {},
+  options: { take?: boolean; onFailed?: () => void } = {},
 ): () => void {
   const listeners = open.get(target) ?? new Set<Listener>();
   open.set(target, listeners);
@@ -298,7 +301,13 @@ export function subscribeHandoff(
     }
 
     // A failed delete leaves the row on disk; the take stays queued instead of
-    // being shown now and replayed on the next run.
+    // being shown now and replayed on the next run. Say so, so a section left
+    // empty can offer another try rather than look as if nothing arrived.
+    if (claim.status === 'failed') {
+      if (open.get(target)?.size) options.onFailed?.();
+      return;
+    }
+
     if (claim.status !== 'taken') return;
 
     const current = open.get(target);
@@ -336,6 +345,23 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
     restoreQueued(target, entry);
     return { status: 'failed' };
   }
+}
+
+/** What came of asking for the next queued take. */
+export type HandoffClaim =
+  | { status: 'taken'; item: HandoffItem }
+  | { status: 'empty' }
+  | { status: 'failed' };
+
+/**
+ * Try to take the next queued take and say what happened. `failed` means the
+ * take is still queued: its row survived, so showing it would bring it back on
+ * the next run. A section uses this to report the attempt and to try again.
+ */
+export async function claimHandoff(target: HandoffTarget): Promise<HandoffClaim> {
+  const claim = await claimStoredTake(target);
+  if (claim.status === 'taken') return { status: 'taken', item: claim.entry.item };
+  return claim.status === 'failed' ? { status: 'failed' } : { status: 'empty' };
 }
 
 function claimQueued(target: HandoffTarget): Pending | null {
@@ -432,32 +458,70 @@ export function queuedTakes(target: HandoffTarget): QueuedTake[] {
 /**
  * Throw away one queued take without taking it. Only ever user-initiated: a
  * take nobody asked to drop stays queued, as it always has.
+ *
+ * The row goes before the take leaves the queue, so a delete that fails leaves
+ * the take where the user can see it and try again. Dropping it from the queue
+ * first is what let a "discarded" take arrive again on the next run.
+ *
+ * Answers false when the take is no longer queued or its row would not go.
  */
-export function discardHandoff(target: HandoffTarget, key: string): boolean {
+export async function discardHandoff(target: HandoffTarget, key: string): Promise<boolean> {
   const queue = pending.get(target);
-  const index = queue ? queue.findIndex((entry) => entry.key === key) : -1;
-  if (!queue || index < 0) return false;
+  if (!queue?.some((entry) => entry.key === key)) return false;
 
-  const [entry] = queue.splice(index, 1);
-  if (queue.length === 0) pending.delete(target);
-  consumed.add(entry.key);
-  write(() => store.remove(entry.key));
+  try {
+    await store.remove(key);
+  } catch {
+    return false;
+  }
+
+  // The delete took a moment; the take may have been claimed while it ran, in
+  // which case there is nothing left to take out of the queue.
+  const current = pending.get(target);
+  const index = current ? current.findIndex((entry) => entry.key === key) : -1;
+  consumed.add(key);
+  if (current && index >= 0) {
+    current.splice(index, 1);
+    if (current.length === 0) pending.delete(target);
+  }
   queuesChanged();
   return true;
 }
 
-/** Throw away everything queued for a section; returns how many went. */
-export function discardHandoffQueue(target: HandoffTarget): number {
+/**
+ * Throw away everything queued for a section, each row first. Only the takes
+ * whose rows actually went leave the queue; the rest stay visible so a failed
+ * clear cannot come back as an arrival on the next run.
+ *
+ * Answers how many went.
+ */
+export async function discardHandoffQueue(target: HandoffTarget): Promise<number> {
   const queue = pending.get(target);
   if (!queue || queue.length === 0) return 0;
 
-  pending.delete(target);
-  for (const entry of queue) {
-    consumed.add(entry.key);
-    write(() => store.remove(entry.key));
+  const asked = new Set(queue.map((entry) => entry.key));
+  const kept = new Set<string>();
+  let gone = 0;
+
+  for (const key of asked) {
+    try {
+      await store.remove(key);
+      consumed.add(key);
+      gone += 1;
+    } catch {
+      kept.add(key);
+    }
   }
+
+  // Anything queued while this ran was never part of the clear and stays; so
+  // does any take whose row would not go.
+  const remaining = (pending.get(target) ?? []).filter(
+    (entry) => !asked.has(entry.key) || kept.has(entry.key),
+  );
+  if (remaining.length === 0) pending.delete(target);
+  else pending.set(target, remaining);
   queuesChanged();
-  return queue.length;
+  return gone;
 }
 
 /** How many takes are waiting for each section; a section with none is left out. */

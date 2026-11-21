@@ -8,7 +8,8 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { clearHandoff, sendHandoff, sendTake } from './lib/handoff';
+import { clearHandoff, sendHandoff, sendTake, setHandoffStore } from './lib/handoff';
+import type { HandoffRecord, HandoffStore } from './lib/handoffStore';
 
 vi.mock('./lib/tts', () => ({
   renderSpeech: vi.fn(async () => new Blob(['tts'])),
@@ -43,6 +44,25 @@ vi.mock('./lib/beat', async (importOriginal) => {
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
 
+/** Storage that can be made to refuse deletes, standing in for a store that will not let a take go. */
+class StubbornStore implements HandoffStore {
+  readonly rows = new Map<string, HandoffRecord>();
+  stubborn = true;
+
+  async list(): Promise<HandoffRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: HandoffRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  async remove(key: string): Promise<void> {
+    if (this.stubborn) throw new Error('the row would not delete');
+    this.rows.delete(key);
+  }
+}
+
 beforeEach(() => {
   clearHandoff();
   // Set the starting route without the event a hash assignment would leave
@@ -61,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearHandoff();
+  setHandoffStore(null);
   vi.unstubAllGlobals();
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
@@ -246,6 +267,69 @@ describe('hand-off navigation', () => {
     expect(await screen.findByText(/Arrived from another section: Second take/)).toBeTruthy();
     expect(screen.queryByText(/more waiting/)).toBeNull();
     expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
+  });
+
+  it('says a take could not be opened, and opens it on another try', async () => {
+    const store = new StubbornStore();
+    setHandoffStore(store);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+
+    // Not an empty section: the take is still queued, and the section says why
+    // it did not open rather than looking as if nothing was sent.
+    expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+
+    store.stubborn = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    });
+
+    expect(await screen.findByText(/Arrived from another section: A take/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('keeps a take the panel could not delete, and says so', async () => {
+    const store = new StubbornStore();
+    setHandoffStore(store);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /1 take waiting for Song/ }));
+    });
+
+    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
+    });
+
+    // Still listed, because its row is still there; the panel explains why
+    // instead of dropping it and letting it arrive again on the next run.
+    expect(panel.textContent).toContain('A take');
+    expect(panel.textContent).toContain('its saved copy is still there');
+    expect(store.rows.size).toBe(1);
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {
