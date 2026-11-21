@@ -32,7 +32,7 @@ Other scripts:
 
 ```bash
 npm run build      # production bundle into dist/
-npm run dist:win   # Windows installer (NSIS) into release/, published as GitHub Release v0.3.0
+npm run dist:win   # Windows installer (NSIS) into release/ (CI publishes it on a tag push)
 # Optional signing: put the Azure Trusted Signing endpoint, account,
 # profile, and publisher in build.win.azureSignOptions in package.json
 # (identifiers, safe to commit), then set AZURE_TENANT_ID /
@@ -48,6 +48,10 @@ npm start          # run Electron against dist/ (build first)
 npm run typecheck  # tsc --noEmit
 npm test           # vitest: EQ curves, ZIP writer, filenames, WAV/MP3
 ```
+
+The window is served from a loopback HTTP origin rather than `file://`, which is
+what gives the renderer a secure context: OPFS model cache, `getUserMedia`, and
+web workers all need it.
 
 ## Releasing
 
@@ -66,10 +70,6 @@ To try the pipeline without publishing anything, run the workflow manually
 (Actions → Release (Windows) → Run workflow). A manual run is a dry run: it
 installs, typechecks, tests, and builds the installer, but skips the tag
 version check and does not create or touch any Release.
-
-The window is served from a loopback HTTP origin rather than `file://`, which is
-what gives the renderer a secure context: OPFS model cache, `getUserMedia`, and
-web workers all need it.
 
 ## Layout
 
