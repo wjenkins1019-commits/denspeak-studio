@@ -83,4 +83,38 @@ describe('Convert hand-off', () => {
     expect(screen.getAllByText('Loaded: First take')).toHaveLength(1);
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
+
+  it('takes one take when Next take is clicked twice before the claim lands', async () => {
+    // Queued before the visit, so there is a queue behind the one it opens with.
+    for (const name of ['First take', 'Second take', 'Third take']) {
+      sendHandoff('convert', { name, blob: new Blob([name]) });
+    }
+
+    render(
+      <StrictMode>
+        <Convert />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByText(/Arrived from another section: First take/)).toBeTruthy();
+    expect(screen.getByText(/2 more waiting/)).toBeTruthy();
+
+    // The second click arrives while the first take's row is still being
+    // deleted. It is the same request, not a request for the take behind it.
+    const next = screen.getByRole('button', { name: 'Next take' });
+    await act(async () => {
+      fireEvent.click(next);
+      fireEvent.click(next);
+    });
+
+    expect(screen.getByText(/Arrived from another section: Second take/)).toBeTruthy();
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+
+    // The take the second click would have claimed is still there to take.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
+    expect(screen.getByText(/Arrived from another section: Third take/)).toBeTruthy();
+    expect(screen.queryByText(/more waiting/)).toBeNull();
+  });
 });

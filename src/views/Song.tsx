@@ -250,9 +250,7 @@ export default function Song() {
             </label>
           </div>
 
-          {handoff.failed ? (
-            <HandoffFailed onRetry={handoff.retry} />
-          ) : handoff.arrival ? (
+          {handoff.arrival && (
             <HandoffNotice
               item={handoff.arrival.item}
               replaced={handoff.arrival.before !== null}
@@ -260,7 +258,13 @@ export default function Song() {
               onNext={handoff.next}
               onKeep={handoff.keep}
             />
-          ) : (
+          )}
+
+          {/* Beside the notice, not instead of it: a next take that would not
+              open must not take away the way back to the one on screen. */}
+          {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
+
+          {!handoff.arrival && !handoff.failed && (
             <WaitingTakes waiting={handoff.waiting} onNext={handoff.next} />
           )}
 

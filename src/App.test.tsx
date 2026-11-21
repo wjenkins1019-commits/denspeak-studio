@@ -354,4 +354,56 @@ describe('hand-off navigation', () => {
     // the take with it rather than land on an empty section.
     expect(await screen.findByText(/^Loaded: A take$/)).toBeTruthy();
   });
+
+  it('keeps the arrival notice when the next take cannot be opened', async () => {
+    const store = new StubbornStore();
+    store.stubborn = false;
+    setHandoffStore(store);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    // Queued while Song is closed, so they wait for its visit.
+    await act(async () => {
+      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+    expect(await screen.findByText(/Arrived from another section: First take/)).toBeTruthy();
+
+    // A take sent to the open Song lands on top, so its notice offers the take
+    // it replaced back. Second take is still queued behind it.
+    await act(async () => {
+      sendHandoff('song', { name: 'Third take', blob: new Blob(['c']), duration: 3 });
+    });
+    expect(screen.getByText(/Arrived from another section: Third take/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep the previous take' })).toBeTruthy();
+
+    // The next take's row will not go. The failure is reported beside the
+    // notice, so the way back to what is on screen is not taken away with it.
+    store.stubborn = true;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
+
+    expect(screen.getByText(/Arrived from another section: Third take/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep the previous take' })).toBeTruthy();
+    expect(screen.getByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+
+    // Retrying opens the take behind, and the one it replaced is still there.
+    store.stubborn = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    });
+
+    expect(screen.getByText(/Arrived from another section: Second take/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep the previous take' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(store.rows.size).toBe(0);
+  });
 });

@@ -68,6 +68,11 @@ export function useHandoffTake<S>(
   // without a word.
   const asked = useRef(false);
 
+  // Whether a take is already being claimed. A second click while the row is
+  // being deleted would claim the take behind it too, and the two arrivals would
+  // replace one another — one take taken without ever being seen.
+  const claiming = useRef(false);
+
   /** Land `item`, then take stock of what is still queued behind it. */
   function deliver(item: HandoffItem) {
     const before = latest.current.current;
@@ -82,7 +87,13 @@ export function useHandoffTake<S>(
    * swallowed: the take is still queued, one retry away.
    */
   function takeNext() {
+    // A click that lands while the delete is still running is a repeat of the
+    // one already in flight, not a request for the take behind it.
+    if (claiming.current) return;
+    claiming.current = true;
+
     void claimHandoff(target).then((claim) => {
+      claiming.current = false;
       if (claim.status === 'taken') deliver(claim.item);
       else if (claim.status === 'failed') setFailed(true);
       else {
