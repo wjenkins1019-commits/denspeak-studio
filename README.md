@@ -109,6 +109,7 @@ version check and does not create or touch any Release.
 | `src/views/Settings.tsx` | Defaults, light/dark UI, cached models, pronunciations |
 | `src/components/EqPanel.tsx` | EQ preset picker plus response curve, shared by three views |
 | `src/components/SendTakeRow.tsx` | "Send this take to" buttons under a finished result |
+| `src/components/HandoffNotice.tsx` | Reports the take that arrived in a section, and offers the replaced one back |
 | `src/lib/tts.ts` | vits-web wrapper (`predict`, `stored`, `remove`, `flush`) |
 | `src/lib/audio.ts` | Phase vocoder, spectral shaping, WAV encode, decode to mono |
 | `src/lib/eq.ts` | EQ presets, biquad chain and the response curve they draw |
@@ -117,6 +118,7 @@ version check and does not create or touch any Release.
 | `src/lib/export.ts` | WAV export and the stored ZIP bundle of the library |
 | `src/lib/library.ts` | IndexedDB take store |
 | `src/lib/handoff.ts` | Hands a finished take to Convert, Transcribe, Shape or Song without a file round-trip |
+| `src/lib/useHandoffTake.ts` | Receives that take on mount or while the section is open, keeping what it replaced |
 | `src/voices.ts` | Generated voice catalog (121 models) |
 | `legacy-build/` | Local-only copy of the original compiled app, untouched, for diffing (not in git; the maintainer keeps it out of the repo) |
 

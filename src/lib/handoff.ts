@@ -18,11 +18,46 @@ export const HANDOFF_TARGETS: Array<{ target: HandoffTarget; label: string }> = 
   { target: 'song', label: 'Beat' },
 ];
 
+type Listener = (item: HandoffItem) => void;
+
 let pending: { target: HandoffTarget; item: HandoffItem } | null = null;
 
-/** Queue a take for `target`; the next mount of that section picks it up. */
+/**
+ * The sections that are open right now. A take sent to one of them is handed
+ * over immediately: the hash would not change, so nothing would remount to take
+ * it, and it would sit until the next visit and land there unasked.
+ */
+const open = new Map<HandoffTarget, Set<Listener>>();
+
+/** Queue a take for `target`, or hand it straight to that section if it is open. */
 export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
+  const listeners = open.get(target);
+
+  if (listeners && listeners.size > 0) {
+    for (const listener of [...listeners]) listener(item);
+    return;
+  }
+
   pending = { target, item };
+}
+
+/**
+ * Listen for takes sent to this section: one queued before it opened is handed
+ * over at once, and one sent while it is open arrives without a remount.
+ * Reading the queued item clears it, so a later visit starts empty.
+ */
+export function subscribeHandoff(target: HandoffTarget, listener: Listener): () => void {
+  const listeners = open.get(target) ?? new Set<Listener>();
+  open.set(target, listeners);
+  listeners.add(listener);
+
+  const queued = takeHandoff(target);
+  if (queued) listener(queued);
+
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) open.delete(target);
+  };
 }
 
 /**

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// The strip must not offer the section it is rendered in: sending there sets an
-// unchanged hash, so no remount consumes the item and it lands on that section's
-// source on the next visit instead.
-import { cleanup, render, screen } from '@testing-library/react';
+// The strip offers every section, including the one on screen: handoff.ts hands
+// the take to an open section rather than queueing it for a remount that the
+// unchanged hash would never trigger.
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SendTakeRow } from './SendTakeRow';
-import { clearHandoff } from '../lib/handoff';
+import { clearHandoff, subscribeHandoff, takeHandoff } from '../lib/handoff';
+
+const take = { name: 'A take', blob: new Blob(['audio']) };
 
 afterEach(() => {
   cleanup();
@@ -13,22 +15,40 @@ afterEach(() => {
   window.location.hash = '';
 });
 
-function renderRow(hash: string) {
-  window.location.hash = hash;
-  render(<SendTakeRow name="A take" blob={new Blob(['audio'])} />);
-  return screen.getAllByRole('button').map((button) => button.textContent);
-}
-
 describe('SendTakeRow', () => {
-  it('leaves out the section it is rendered in', () => {
-    expect(renderRow('#/process')).toEqual(['Convert', 'Transcribe', 'Beat']);
+  it('offers every section, including the one already on screen', () => {
+    window.location.hash = '#/process';
+
+    render(<SendTakeRow {...take} />);
+
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Convert',
+      'Transcribe',
+      'Shape',
+      'Beat',
+    ]);
   });
 
-  it('offers every section from a view that is not a target', () => {
-    expect(renderRow('#/library')).toEqual(['Convert', 'Transcribe', 'Shape', 'Beat']);
+  it('hands the take to the section already open instead of queueing it', () => {
+    window.location.hash = '#/process';
+    const seen: string[] = [];
+    const stop = subscribeHandoff('process', (item) => seen.push(item.name));
+
+    render(<SendTakeRow {...take} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Shape' }));
+    stop();
+
+    expect(seen).toEqual(['A take']);
+    expect(takeHandoff('process')).toBeNull();
   });
 
-  it('offers every section when there is no route yet', () => {
-    expect(renderRow('')).toEqual(['Convert', 'Transcribe', 'Shape', 'Beat']);
+  it('queues for a section that is not open and opens it', () => {
+    window.location.hash = '#/convert';
+
+    render(<SendTakeRow {...take} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Beat' }));
+
+    expect(window.location.hash).toBe('#/song');
+    expect(takeHandoff('song')?.name).toBe('A take');
   });
 });

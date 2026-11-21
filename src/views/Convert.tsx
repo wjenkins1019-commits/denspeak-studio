@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { decodeToMono, transformVoice, wavBlob, type VoiceShape } from '../lib/audio';
 import { applyEq, sameBands, styleById, type EqBand } from '../lib/eq';
 import { saveTake, type Take } from '../lib/library';
@@ -7,7 +7,8 @@ import { Player } from '../components/Player';
 import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { takeHandoff } from '../lib/handoff';
+import { HandoffNotice } from '../components/HandoffNotice';
+import { useHandoffTake } from '../lib/useHandoffTake';
 import { EqPanel } from '../components/EqPanel';
 
 interface Preset {
@@ -61,11 +62,13 @@ export default function Convert() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // A take handed over from Studio arrives as this section's source.
-  useEffect(() => {
-    const handed = takeHandoff('convert');
-    if (handed) setSource({ blob: handed.blob, name: handed.name });
-  }, []);
+  // A take sent here from another section arrives as this section's source.
+  const handoff = useHandoffTake<Source>(
+    'convert',
+    source,
+    (item) => setSource({ blob: item.blob, name: item.name }),
+    (before) => setSource(before),
+  );
 
   const style = useMemo(() => styleById(eqId), [eqId]);
   const bands = editedBands ?? style.bands;
@@ -202,6 +205,14 @@ export default function Convert() {
             <input type="file" accept="audio/*" onChange={(event) => void handleFile(event.target.files?.[0])} />
           </div>
           <LiveLevelMeter stream={meterStream} />
+
+          {handoff.arrival && (
+            <HandoffNotice
+              item={handoff.arrival.item}
+              replaced={handoff.arrival.before !== null}
+              onKeep={handoff.keep}
+            />
+          )}
 
           {source ? (
             <>

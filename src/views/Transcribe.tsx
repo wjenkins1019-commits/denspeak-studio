@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { decodeToMono } from '../lib/audio';
 import { exportFileName, saveBlob } from '../lib/export';
 import { SETTING_KEYS, useSetting } from '../lib/settings';
 import { TRANSCRIBE_MODELS, transcribe } from '../lib/transcribe';
 import { Player } from '../components/Player';
-import { takeHandoff } from '../lib/handoff';
+import { HandoffNotice } from '../components/HandoffNotice';
+import { useHandoffTake } from '../lib/useHandoffTake';
 
 interface Source {
   blob: Blob;
@@ -27,13 +28,16 @@ export default function Transcribe() {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // A take handed over from Studio arrives as this section's sample.
-  useEffect(() => {
-    const handed = takeHandoff('transcribe');
-    if (handed) void load(new File([handed.blob], handed.name, { type: handed.blob.type }));
-    // Runs once: the hand-off is consumed on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // A take sent here from another section arrives as this section's sample.
+  const handoff = useHandoffTake<{ source: Source | null; text: string }>(
+    'transcribe',
+    source || text ? { source, text } : null,
+    (item) => void load(new File([item.blob], item.name, { type: item.blob.type })),
+    (before) => {
+      setSource(before.source);
+      setText(before.text);
+    },
+  );
 
   async function load(file: File | undefined) {
     if (!file) return;
@@ -118,6 +122,14 @@ export default function Transcribe() {
               onChange={(event) => void load(event.target.files?.[0])}
             />
           </div>
+
+          {handoff.arrival && (
+            <HandoffNotice
+              item={handoff.arrival.item}
+              replaced={handoff.arrival.before !== null}
+              onKeep={handoff.keep}
+            />
+          )}
 
           {source ? (
             <>

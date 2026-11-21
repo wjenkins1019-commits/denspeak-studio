@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // Hand-off wiring: a take queued in Studio must arrive in Convert already
 // loaded and playable, instead of leaving the user to export a WAV and pick it
-// again. The store's own delivery rules are covered in src/lib/handoff.test.ts;
-// this test owns the receiving view.
-import { cleanup, render, screen } from '@testing-library/react';
+// again. A take sent while Convert is open must land without a remount, say what
+// arrived, and leave the replaced take reachable. The store's own delivery rules
+// are covered in src/lib/handoff.test.ts; this test owes the receiving view.
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Convert from './Convert';
 import { clearHandoff, sendHandoff } from '../lib/handoff';
@@ -39,5 +40,22 @@ describe('Convert hand-off', () => {
     expect(audio).not.toBeNull();
     expect(audio?.isConnected).toBe(true);
     expect(screen.queryByText(/No source yet/)).toBeNull();
+  });
+
+  it('says what arrived and offers the take it replaced back', () => {
+    render(<Convert />);
+
+    act(() => sendHandoff('convert', { name: 'First take', blob: new Blob(['a']) }));
+    expect(screen.getByText(/Arrived from another section: First take/)).toBeTruthy();
+    expect(screen.getByText('Loaded: First take')).toBeTruthy();
+
+    act(() => sendHandoff('convert', { name: 'Second take', blob: new Blob(['b']) }));
+    expect(screen.getByText('Loaded: Second take')).toBeTruthy();
+    expect(screen.getByText(/it replaced the take you had/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep the previous take' }));
+
+    expect(screen.getByText('Loaded: First take')).toBeTruthy();
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
 });

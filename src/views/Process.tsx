@@ -20,7 +20,8 @@ import { LiveLevelMeter } from '../components/LiveLevelMeter';
 import { RecordDot } from '../components/RecordDot';
 import { EqPanel } from '../components/EqPanel';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { takeHandoff } from '../lib/handoff';
+import { HandoffNotice } from '../components/HandoffNotice';
+import { useHandoffTake } from '../lib/useHandoffTake';
 
 const BANK_TEXT = 'This is a sample from the voice bank, shaped by the equaliser.';
 
@@ -74,12 +75,13 @@ export default function Process() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
-  // A take handed over from Studio arrives as this section's sample.
-  useEffect(() => {
-    const handed = takeHandoff('process');
-    if (handed) loadSource(handed.blob, handed.name);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // A take sent here from another section arrives as this section's sample.
+  const handoff = useHandoffTake<Source>(
+    'process',
+    source,
+    (item) => loadSource(item.blob, item.name),
+    (before) => loadSource(before.blob, before.label),
+  );
 
   const style = useMemo(() => styleById(styleId), [styleId]);
 
@@ -328,6 +330,14 @@ export default function Process() {
             </button>
           </div>
           <LiveLevelMeter stream={meterStream} />
+
+          {handoff.arrival && (
+            <HandoffNotice
+              item={handoff.arrival.item}
+              replaced={handoff.arrival.before !== null}
+              onKeep={handoff.keep}
+            />
+          )}
 
           {source && (
             <div className="stack">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { VOICES, VOICES_BY_ID, voiceLabel } from '../voices';
 import { renderSpeech } from '../lib/tts';
 import { decodeToMono, wavBlob } from '../lib/audio';
@@ -10,7 +10,8 @@ import { titleFromScript } from '../lib/format';
 import { DEFAULT_VOICE, SETTING_KEYS, useSetting } from '../lib/settings';
 import { Player } from '../components/Player';
 import { SendTakeRow } from '../components/SendTakeRow';
-import { takeHandoff } from '../lib/handoff';
+import { HandoffNotice } from '../components/HandoffNotice';
+import { useHandoffTake } from '../lib/useHandoffTake';
 
 const LYRICS_SAMPLE = `I write it once, the beat decides the pace
 Every line I drop lands exactly in its place
@@ -42,13 +43,23 @@ export default function Song() {
 
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // A take handed over from Studio arrives as this section's beat.
-  useEffect(() => {
-    const handed = takeHandoff('song');
-    if (handed) void readBeat(handed.name, handed.blob);
-    // Runs once: the hand-off is consumed on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // A take sent here from another section arrives as this section's beat.
+  const handoff = useHandoffTake<{
+    beat: Beat | null;
+    tempo: TempoInfo | null;
+    bpm: number;
+    offset: number;
+  }>(
+    'song',
+    beat ? { beat, tempo, bpm, offset } : null,
+    (item) => void readBeat(item.name, item.blob),
+    (before) => {
+      setBeat(before.beat);
+      setTempo(before.tempo);
+      setBpm(before.bpm);
+      setOffset(before.offset);
+    },
+  );
 
   const lines = useMemo(
     () =>
@@ -237,6 +248,14 @@ export default function Song() {
               </select>
             </label>
           </div>
+
+          {handoff.arrival && (
+            <HandoffNotice
+              item={handoff.arrival.item}
+              replaced={handoff.arrival.before !== null}
+              onKeep={handoff.keep}
+            />
+          )}
 
           {tempo && (
             <small className="muted">
