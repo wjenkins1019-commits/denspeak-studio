@@ -237,6 +237,9 @@ small {
 .nav-label {
   display: flex;
   align-items: center;
+  /* A button's cross-axis alignment keeps children shrink-wrapped, which would
+     leave the count stuck to the name instead of on the rail's right edge. */
+  align-self: stretch;
   justify-content: space-between;
   gap: 8px;
 }
@@ -253,6 +256,11 @@ small {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
+}
+
+/* Light UI darkens the accent, so the count keeps white text to stay legible. */
+:root[data-theme='light'] .nav-count {
+  color: #ffffff;
 }
 
 /* Spoken, not drawn: what the rail's count means. */
