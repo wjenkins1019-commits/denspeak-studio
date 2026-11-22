@@ -101,13 +101,13 @@ const THEMES = [
 type Literal = { selector: string; property: string; value: string };
 
 /** Every rule that paints text, or the surface under it, with a raw colour. */
-function literals(): Literal[] {
+function literals(source: string): Literal[] {
   // Comments carry prose about colours, so they are stripped before the scan.
-  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, '');
   const found: Literal[] = [];
   const rule = /([^{}]+)\{([^{}]*)\}/g;
 
-  for (const match of source.matchAll(rule)) {
+  for (const match of text.matchAll(rule)) {
     const selector = match[1].replace(/\s+/g, ' ').trim();
     for (const declaration of match[2].split(';')) {
       const at = declaration.indexOf(':');
@@ -128,7 +128,9 @@ describe('text painted with a raw colour', () => {
   it('uses tokens for every text colour and surface', () => {
     // No exceptions: a colour chosen in a rule rather than a token skips every
     // pair above, so it fails here instead of reaching a screen unchecked.
-    const painted = literals().map((literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`);
+    const painted = literals(css).map(
+      (literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`,
+    );
     expect(painted).toEqual([]);
   });
 });
@@ -155,32 +157,106 @@ function components(dir: string): string[] {
 }
 
 /**
+ * Comments are prose, so they are blanked out before a component is scanned —
+ * but their newlines are kept, so a reported line still points at the code.
+ * `//` is left alone after a colon, which is how `https://` survives.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/[^\n]*/gm, (comment, lead: string) => lead + ' '.repeat(comment.length - lead.length));
+}
+
+/** Raw colours a component hands to an element, as `label:line  fragment`. */
+function inlineColours(label: string, source: string): string[] {
+  const text = withoutComments(source);
+  const offences: string[] = [];
+  const note = (index: number, fragment: string) => {
+    const line = text.slice(0, index).split('\n').length;
+    offences.push(`${label}:${line}  ${fragment.trim()}`);
+  };
+
+  for (const match of text.matchAll(RAW_COLOUR)) note(match.index ?? 0, match[0]);
+
+  for (const pattern of [COLOUR_ATTR, COLOUR_PROP]) {
+    for (const match of text.matchAll(pattern)) {
+      if (THEMED_VALUE.test(match[3].trim())) continue;
+      note(match.index ?? 0, match[0]);
+    }
+  }
+
+  return offences;
+}
+
+/**
  * The styles.css half of the guard cannot see a colour passed straight to an
  * element, and a component that hard-codes one is just as far outside the token
  * pairs above. Components paint through tokens too: a raw colour fails here.
  */
 describe('colours written inline in components', () => {
   it('paints only through tokens', () => {
-    const offences: string[] = [];
-
-    for (const file of components(SRC)) {
-      const text = readFileSync(file, 'utf8');
-      const note = (index: number, fragment: string) => {
-        const line = text.slice(0, index).split('\n').length;
-        offences.push(`${relative(SRC, file).replace(/\\/g, '/')}:${line}  ${fragment.trim()}`);
-      };
-
-      for (const match of text.matchAll(RAW_COLOUR)) note(match.index ?? 0, match[0]);
-
-      for (const pattern of [COLOUR_ATTR, COLOUR_PROP]) {
-        for (const match of text.matchAll(pattern)) {
-          if (THEMED_VALUE.test(match[3].trim())) continue;
-          note(match.index ?? 0, match[0]);
-        }
-      }
-    }
+    const offences = components(SRC).flatMap((file) =>
+      inlineColours(relative(SRC, file).replace(/\\/g, '/'), readFileSync(file, 'utf8')),
+    );
 
     expect(offences).toEqual([]);
+  });
+});
+
+describe('what the scans read', () => {
+  it('skips a colour mentioned in a stylesheet comment', () => {
+    const source = [
+      ':root {',
+      '  --bg: #040b18;',
+      '}',
+      '/* the ring used to be #ffffff, which read fine on paper */',
+      '.ring {',
+      '  /* color: #ff0000; */',
+      '  color: var(--text);',
+      '}',
+    ].join('\n');
+
+    expect(literals(source)).toEqual([]);
+  });
+
+  it('still finds a colour a stylesheet rule paints with', () => {
+    expect(literals('.card {\n  color: #ff0000;\n}')).toEqual([
+      { selector: '.card', property: 'color', value: '#ff0000' },
+    ]);
+  });
+
+  it('skips a colour mentioned in a component comment', () => {
+    const source = [
+      'export function Mark() {',
+      '  // the tile used to be #0e2a4d',
+      '  /* and the sheen came from fill="#5aa8ff" */',
+      '  return <rect fill="var(--accent)" />;',
+      '}',
+    ].join('\n');
+
+    expect(inlineColours('Mark.tsx', source)).toEqual([]);
+  });
+
+  it('finds a colour a component hands to an element, and where it is', () => {
+    const source = [
+      'export function Card() {',
+      '  return (',
+      "    <span style={{ color: 'red', background: '#ff0000' }} />",
+      '  );',
+      '}',
+    ].join('\n');
+
+    expect(inlineColours('Card.tsx', source)).toEqual([
+      'Card.tsx:3  #ff0000',
+      "Card.tsx:3  color: 'red'",
+      "Card.tsx:3  background: '#ff0000'",
+    ]);
+  });
+
+  it('does not read a URL as the start of a comment', () => {
+    const source = "const url = 'https://example.test/a'; const tint = { color: 'red' };";
+
+    expect(inlineColours('Link.tsx', source)).toEqual(["Link.tsx:1  color: 'red'"]);
   });
 });
 
