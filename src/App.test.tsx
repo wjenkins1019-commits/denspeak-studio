@@ -168,7 +168,6 @@ async function openSongQueue(names: string[], store?: HandoffStore): Promise<HTM
       <App />
     </StrictMode>,
   );
-  await act(async () => {});
 
   await act(async () => {
     names.forEach((name, index) => {
@@ -176,9 +175,12 @@ async function openSongQueue(names: string[], store?: HandoffStore): Promise<HTM
     });
   });
 
+  // The count the sends produce, through the rail's subscription: waiting for
+  // it proves the mount settled, instead of assuming a tick did.
   const count = names.length === 1 ? '1 take' : `${names.length} takes`;
+  const countButton = await screen.findByRole('button', { name: new RegExp(`${count} waiting for Song`) });
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${count} waiting for Song`) }));
+    fireEvent.click(countButton);
   });
 
   return screen.getByRole('dialog', { name: 'Waiting for Song' });
@@ -209,8 +211,6 @@ describe('hand-off navigation', () => {
       </StrictMode>,
     );
 
-    // Let the rail's first read settle so it becomes the baseline.
-    await act(async () => {});
     const announcer = () => document.getElementById('handoff-announcer');
     expect(announcer()?.getAttribute('role')).toBe('status');
     expect(announcer()?.getAttribute('aria-live')).toBe('polite');
@@ -219,7 +219,9 @@ describe('hand-off navigation', () => {
     await act(async () => {
       sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
     });
-    expect(announcer()?.textContent).toBe('1 take waiting for Song');
+    // The send lands through the rail's subscription; waiting for the line
+    // proves the mount settled, instead of assuming a tick did.
+    await waitFor(() => expect(announcer()?.textContent).toBe('1 take waiting for Song'));
 
     await act(async () => {
       sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
@@ -242,9 +244,6 @@ describe('hand-off navigation', () => {
       </StrictMode>,
     );
 
-    // Let the rail's first read of the store settle, so the count below can
-    // only come from being told about the send.
-    await act(async () => {});
     expect(screen.queryByRole('button', { name: /take waiting/ })).toBeNull();
 
     await act(async () => {
@@ -257,7 +256,8 @@ describe('hand-off navigation', () => {
     });
 
     // The rail says where it is waiting, without opening Song to find out.
-    const count = screen.getByRole('button', { name: /1 take waiting for Song/ });
+    // Waiting for it proves the send landed through a settled subscription.
+    const count = await screen.findByRole('button', { name: /1 take waiting for Song/ });
 
     await act(async () => {
       fireEvent.click(count);
@@ -446,16 +446,15 @@ describe('hand-off navigation', () => {
       </StrictMode>,
     );
 
-    await act(async () => {});
-
     await act(async () => {
       sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
       sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
       sendHandoff('process', { name: 'Shape take', blob: new Blob(['c']), duration: 3 });
     });
 
-    // Both counts are on the rail while those sections are elsewhere.
-    expect(screen.getByRole('button', { name: /2 takes waiting for Song/ })).toBeTruthy();
+    // Both counts are on the rail while those sections are elsewhere; waiting
+    // for the first proves the sends landed through a settled subscription.
+    expect(await screen.findByRole('button', { name: /2 takes waiting for Song/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /1 take waiting for Shape/ })).toBeTruthy();
 
     await act(async () => {
@@ -493,8 +492,6 @@ describe('hand-off navigation', () => {
         <App />
       </StrictMode>,
     );
-    await act(async () => {});
-
     await act(async () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
     });
@@ -740,7 +737,6 @@ describe('hand-off navigation', () => {
         <App />
       </StrictMode>,
     );
-    await act(async () => {});
 
     await act(async () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
@@ -766,7 +762,6 @@ describe('hand-off navigation', () => {
         <App />
       </StrictMode>,
     );
-    await act(async () => {});
 
     await act(async () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
@@ -821,8 +816,6 @@ describe('hand-off navigation', () => {
         <App />
       </StrictMode>,
     );
-    await act(async () => {});
-
     // Queued while Song is closed, so they wait for its visit.
     await act(async () => {
       sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });

@@ -6,7 +6,7 @@
 // the app is: delivery rests on a subscription effect, so a take must still land
 // exactly once when React mounts, cleans up and mounts again.
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Convert from './Convert';
 import { clearHandoff, sendHandoff } from '../lib/handoff';
@@ -42,9 +42,9 @@ describe('Convert hand-off', () => {
     );
 
     expect(await screen.findAllByText('Loaded: Chapter one')).toHaveLength(1);
-    // The player only mounts once its effect has made the object URL.
-    await act(async () => {});
-    expect(document.querySelectorAll('audio')).toHaveLength(1);
+    // The player only mounts once its effect has made the object URL: wait for
+    // the element the effect mounts, rather than assuming a tick ran it.
+    await waitFor(() => expect(document.querySelectorAll('audio')).toHaveLength(1));
     expect(screen.queryByText(/No source yet/)).toBeNull();
     expect(screen.getAllByText(/Arrived from another section/)).toHaveLength(1);
 
@@ -55,8 +55,9 @@ describe('Convert hand-off', () => {
         <Convert />
       </StrictMode>,
     );
-    // Let the new mount's store read settle before saying nothing arrived.
-    await act(async () => {});
+    // The new mount reads an empty store, so the empty hint is what says the
+    // mount settled — before it, saying nothing arrived proves nothing.
+    expect(await screen.findByText(/No source yet/)).toBeTruthy();
     expect(screen.queryByText(/Loaded: Chapter one/)).toBeNull();
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
   });
