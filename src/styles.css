@@ -18,6 +18,9 @@
   --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.09);
   --surface: rgba(2, 10, 24, 0.55);
   --surface-soft: rgba(2, 10, 24, 0.4);
+  /* The EQ graph's readout chip: opaque enough that its label reads cleanly
+     over the curve, and a token so the light theme can swap it for paper. */
+  --readout: rgba(2, 10, 24, 0.55);
   --rail-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.01));
   --active-soft: rgba(90, 168, 255, 0.16);
   --active-strong: rgba(90, 168, 255, 0.22);
@@ -62,6 +65,7 @@
   --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   --surface: rgba(255, 255, 255, 0.92);
   --surface-soft: rgba(255, 255, 255, 0.7);
+  --readout: #ffffff;
   --rail-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.62));
   --active-soft: rgba(26, 111, 212, 0.12);
   --active-strong: rgba(26, 111, 212, 0.2);
@@ -1024,7 +1028,7 @@ input[type='file']::file-selector-button:hover {
 }
 
 .eq-graph .eq-readout rect {
-  fill: var(--surface);
+  fill: var(--readout);
   stroke: var(--line);
   stroke-width: 1;
   filter: drop-shadow(0 6px 14px rgba(2, 8, 20, 0.4));
@@ -1055,7 +1059,6 @@ input[type='file']::file-selector-button:hover {
 }
 
 :root[data-theme='light'] .eq-graph .eq-readout rect {
-  fill: #ffffff;
   filter: drop-shadow(0 6px 14px rgba(23, 45, 80, 0.16));
 }
 

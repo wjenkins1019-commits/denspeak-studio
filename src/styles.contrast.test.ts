@@ -86,6 +86,8 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['--danger', '--bg-2'],
   ['--warm', '--bg'],
   ['--warm', '--bg-2'],
+  // The EQ graph's readout label sits on its own chip.
+  ['--text', '--readout'],
 ];
 
 const THEMES = [
@@ -119,53 +121,12 @@ function literals(): Literal[] {
   return found;
 }
 
-/**
- * Raw colours a rule is still allowed to paint itself with, each with the token
- * drawn on top of it so the pair stays under the same 4.5:1 bar. Nothing else
- * should be on this list: text belongs to the tokens.
- */
-const ALLOWED_LITERALS: Array<{
-  selector: string;
-  property: string;
-  value: string;
-  theme: 'dark' | 'light';
-  text: string;
-}> = [
-  {
-    // The EQ graph's readout chip: a literal white in the light theme, with the
-    // value label drawn on top of it in --text.
-    selector: ":root[data-theme='light'] .eq-graph .eq-readout rect",
-    property: 'fill',
-    value: '#ffffff',
-    theme: 'light',
-    text: '--text',
-  },
-];
-
 describe('text painted with a raw colour', () => {
   it('uses tokens for every text colour and surface', () => {
-    const unexpected = literals().filter(
-      (literal) =>
-        !ALLOWED_LITERALS.some(
-          (allowed) =>
-            allowed.selector === literal.selector &&
-            allowed.property === literal.property &&
-            allowed.value.toLowerCase() === literal.value.toLowerCase(),
-        ),
-    );
-
-    expect(unexpected.map((literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`)).toEqual([]);
-  });
-
-  it('keeps each allowlisted surface readable under its text', () => {
-    for (const allowed of ALLOWED_LITERALS) {
-      const block = tokenBlock(allowed.theme === 'light' ? ":root[data-theme='light'] {" : ':root {');
-      const ratio = contrast(token(block, allowed.text), colour(allowed.value));
-      expect(
-        ratio,
-        `${allowed.text} on ${allowed.value} (${allowed.selector}) is ${ratio.toFixed(2)}:1`,
-      ).toBeGreaterThanOrEqual(4.5);
-    }
+    // No exceptions: a colour chosen in a rule rather than a token skips every
+    // pair above, so it fails here instead of reaching a screen unchecked.
+    const painted = literals().map((literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`);
+    expect(painted).toEqual([]);
   });
 });
 
@@ -176,6 +137,8 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
     '--bg-2': token(block, '--bg-2'),
     // The hint box sits on a card, so its translucent fill is measured there.
     '--hint': over(token(block, '--hint-bg'), token(block, '--bg-2')),
+    // The readout chip sits on the graph canvas, so its fill is measured there.
+    '--readout': over(token(block, '--readout'), token(block, '--bg')),
   };
 
   it.each(TEXT_PAIRS)('keeps %s readable on %s', (fgToken, bgToken) => {
