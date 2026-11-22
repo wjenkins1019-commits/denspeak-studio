@@ -90,7 +90,7 @@
   --shadow-card: 0 18px 44px rgba(23, 45, 80, 0.12);
   --shadow-brand: 0 8px 20px rgba(23, 45, 80, 0.16);
   --bg-image:
-    radial-gradient(1100px 650px at 10% -10%, rgba(26, 111, 212, 0.12), transparent 60%),
+    radial-gradient(1100px 650px at 10% -10%, rgba(26, 111, 212, 0.09), transparent 60%),
     radial-gradient(900px 600px at 92% 0%, rgba(13, 127, 168, 0.1), transparent 55%),
     linear-gradient(180deg, var(--bg-2), var(--bg) 45%);
   color-scheme: light;
