@@ -9,7 +9,7 @@
 // bands are dropped when a different preset is chosen, and deleting a saved
 // preset removes it outright. Both are one click from coming back.
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Process from './Process';
 import { clearHandoff, pendingCount, sendHandoff } from '../lib/handoff';
@@ -80,8 +80,12 @@ describe('Shape hand-off', () => {
     // Announced by the live region, not just drawn: the record dot is the only
     // other status in the view.
     expect(notice.closest('[role="status"]')).not.toBeNull();
-    // The view swapped in under the user, so focus goes with it.
-    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }));
+    // The view swapped in under the user, so focus goes with it. The move is made
+    // in an effect, which runs after the notice is already in the DOM: the text
+    // can be found on a commit whose effects have not been flushed yet, so wait
+    // for the focus rather than reading it in the same tick as the text.
+    const heading = screen.getByRole('heading', { level: 1 });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 
   it('leaves focus alone when a take arrives while the user is working', () => {
