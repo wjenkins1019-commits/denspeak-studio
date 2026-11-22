@@ -142,14 +142,23 @@ const RAW_COLOUR = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/gi;
 const THEMED_VALUE =
   /^(var\(--[a-z0-9-]+\)|transparent|currentColor|none|inherit|unset|undefined|url\(#|(?:linear|radial|conic)-gradient\()/i;
 
-/** Keys that paint: SVG attributes first, then the wider style properties. */
-const ATTR_KEYS = ['fill', 'stroke', 'stopColor', 'floodColor', 'color', 'caretColor'];
-const STYLE_KEYS = ['backgroundColor', 'background', 'borderColor', 'outlineColor', 'textDecorationColor', ...ATTR_KEYS];
-const ATTRIBUTES = ATTR_KEYS.join('|');
+/** Keys that paint, in the camelCase that JSX and style objects use. */
+const STYLE_KEYS = [
+  'backgroundColor',
+  'background',
+  'borderColor',
+  'outlineColor',
+  'textDecorationColor',
+  'fill',
+  'stroke',
+  'stopColor',
+  'floodColor',
+  'color',
+  'caretColor',
+];
 
-const COLOUR_ATTR = new RegExp(`\\b(${ATTRIBUTES})=(["'])([^"']*)\\2`, 'g');
-const COLOUR_ATTR_EXPR = new RegExp(`\\b(${ATTRIBUTES})=\\{`, 'g');
-const COLOUR_PROP = new RegExp(`\\b(${STYLE_KEYS.join('|')})\\s*:\\s*`, 'g');
+/** A key and the `:` or `=` that opens its value, in JSX or in an object. */
+const COLOUR_KEY = new RegExp(`\\b(${STYLE_KEYS.join('|')})(\\s*[:=])\\s*`, 'g');
 const QUOTED = /(['"`])((?:[^'"`\\]|\\.)*)\1/g;
 
 /**
@@ -403,11 +412,12 @@ function inlineColours(label: string, source: string): string[] {
   const offences: Array<{ index: number; fragment: string }> = [];
   const reported = new Set<number>();
   const note = (index: number, fragment: string) => {
+    if (reported.has(index)) return;
     reported.add(index);
     offences.push({ index, fragment: fragment.trim() });
   };
 
-  /** A colour named inside an expression: `hot ? 'red' : undefined`. */
+  /** A colour named inside a value: `hot ? 'red' : undefined`. */
   const flagNames = (value: string, at: number, property: string) => {
     for (const inner of value.matchAll(QUOTED)) {
       if (!namesColour(inner[2])) continue;
@@ -417,48 +427,62 @@ function inlineColours(label: string, source: string): string[] {
 
   for (const match of text.matchAll(RAW_COLOUR)) note(match.index ?? 0, match[0]);
 
-  for (const match of text.matchAll(COLOUR_ATTR)) {
-    if (THEMED_VALUE.test(match[3].trim())) continue;
-    note(match.index ?? 0, match[0]);
-  }
+  /**
+   * A value that is one quoted string is checked whole; anything else is an
+   * expression, whose strings only matter if one of them names a colour.
+   * `written` is how the value reads at its key, for the report.
+   */
+  const checkValue = (raw: string, at: number, property: string, written: string) => {
+    const single = raw.match(/^(['"])((?:[^'"\\]|\\.)*)\1$/);
 
-  // An attribute handed an expression instead of a string.
-  for (const match of text.matchAll(COLOUR_ATTR_EXPR)) {
-    const { value, at } = valueAt(text, (match.index ?? 0) + match[0].length);
-    flagNames(value, at, match[1]);
-  }
+    if (!single) {
+      flagNames(raw, at, property);
+    } else if (!THEMED_VALUE.test(single[2].trim())) {
+      note(at, written);
+    }
+  };
 
-  for (const match of text.matchAll(COLOUR_PROP)) {
-    const { value, at } = valueAt(text, (match.index ?? 0) + match[0].length);
-    const single = value.match(/^(['"])((?:[^'"\\]|\\.)*)\1$/);
+  // Every key that paints, whether written as a JSX attribute or a style
+  // property, and whether it was handed a string or an expression.
+  for (const match of text.matchAll(COLOUR_KEY)) {
+    const [, property, separator] = match;
+    const start = (match.index ?? 0) + match[0].length;
 
-    // A plain string is checked whole; anything else is an expression whose
-    // strings only matter if one of them names a colour.
-    if (single) {
-      if (!THEMED_VALUE.test(single[2].trim())) note(at, `${match[1]}: ${single[0]}`);
-    } else {
-      flagNames(value, at, match[1]);
+    if (separator.trim() !== '=') {
+      const { value, at } = valueAt(text, start);
+      checkValue(value, at, property, `${property}: ${value}`);
+      continue;
+    }
+
+    const opener = text[start];
+
+    if (opener === '{') {
+      const { value, at } = valueAt(text, start + 1);
+      checkValue(value, at, property, `${property}: ${value}`);
+    } else if (opener === '"' || opener === "'") {
+      const close = text.indexOf(opener, start + 1);
+      if (close === -1) continue;
+
+      const raw = text.slice(start, close + 1);
+      checkValue(raw, start, property, `${property}=${raw}`);
     }
   }
 
-  // A bare name is a colour too: `export const TINT = 'white'` has no property
-  // or attribute to bring it in, so any string that is nothing but a colour
-  // name is reported. Already-reported strings are skipped, keeping each one
-  // against the property that gave it context.
+  // Strings then carry what no key can see: a bare name kept in a constant, or
+  // a stylesheet built as a template, whose declarations are read as CSS.
   for (const match of text.matchAll(QUOTED)) {
     const index = match.index ?? 0;
-    if (reported.has(index) || !namesColour(match[2])) continue;
-    note(index, match[0]);
+
+    if (namesColour(match[2])) {
+      note(index, match[0]);
+      continue;
+    }
+
+    for (const colour of cssColours(match[2], index + 1)) note(colour.index, colour.fragment);
   }
 
-  // A stylesheet built in a string keeps its colours as text until it renders,
-  // so its declarations are read here rather than as a component's own paint.
-  for (const match of text.matchAll(QUOTED)) {
-    for (const colour of cssColours(match[2], (match.index ?? 0) + 1)) note(colour.index, colour.fragment);
-  }
-
-  // The checks run property by property, so their findings are sorted back into
-  // source order: a failure then reads down the file instead of jumping around.
+  // The checks run key by key, so their findings are sorted back into source
+  // order: a failure then reads down the file instead of jumping around.
   return offences
     .sort((a, b) => a.index - b.index)
     .map(({ index, fragment }) => {
