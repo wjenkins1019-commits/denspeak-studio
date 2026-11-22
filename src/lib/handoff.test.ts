@@ -370,7 +370,9 @@ describe('durable queue', () => {
     expect(pendingCount('convert')).toBe(1);
 
     store.remove = remove;
-    expect(await claimHandoff('convert')).toEqual({ status: 'taken', item });
+    // The taken claim carries its way back: a section gone before the delete
+    // lands puts the take back with it instead of losing it.
+    expect(await claimHandoff('convert')).toMatchObject({ status: 'taken', item });
     expect(await claimHandoff('convert')).toEqual({ status: 'empty' });
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
   });

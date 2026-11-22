@@ -9,7 +9,8 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Convert from './Convert';
-import { clearHandoff, sendHandoff } from '../lib/handoff';
+import { clearHandoff, pendingCount, sendHandoff, setHandoffStore } from '../lib/handoff';
+import type { HandoffRecord } from '../lib/handoffStore';
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -24,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearHandoff();
+  setHandoffStore(null);
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
 });
@@ -117,5 +119,65 @@ describe('Convert hand-off', () => {
     });
     expect(screen.getByText(/Arrived from another section: Third take/)).toBeTruthy();
     expect(screen.queryByText(/more waiting/)).toBeNull();
+  });
+
+  it('puts back a Next-take claim when the view is gone before the delete lands', async () => {
+    // The first two deletes wait for the test; later ones go through, so a
+    // later visit can take what is put back.
+    const releases: Array<() => void> = [];
+    const rows = new Map<string, HandoffRecord>();
+    let gatedRemoves = 2;
+    setHandoffStore({
+      async list(): Promise<HandoffRecord[]> {
+        return [...rows.values()];
+      },
+      async put(record: HandoffRecord): Promise<void> {
+        rows.set(record.key, record);
+      },
+      remove(key: string): Promise<void> {
+        if (gatedRemoves > 0) {
+          gatedRemoves -= 1;
+          return new Promise<void>((resolve) => {
+            releases.push(() => {
+              rows.delete(key);
+              resolve();
+            });
+          });
+        }
+        rows.delete(key);
+        return Promise.resolve();
+      },
+    });
+    sendHandoff('convert', { name: 'First take', blob: new Blob(['a']) });
+    sendHandoff('convert', { name: 'Second take', blob: new Blob(['b']) });
+
+    // A plain render: one subscription, so one claim at a time.
+    const { unmount } = render(<Convert />);
+    // The visit's own claim has to land before there is a Next take to press.
+    await act(async () => {
+      releases.shift()?.();
+    });
+    expect(await screen.findByText(/Arrived from another section: First take/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
+    // The claim is in flight: the second take is out of the queue already,
+    // its row still waiting on the delete.
+    expect(pendingCount('convert')).toBe(0);
+
+    // Navigating away unmounts the view before that delete lands.
+    act(() => {
+      unmount();
+    });
+    await act(async () => {
+      releases.shift()?.();
+    });
+
+    // The take is still queued rather than lost with the view: a later visit
+    // takes it instead of finding nothing.
+    expect(pendingCount('convert')).toBe(1);
+    render(<Convert />);
+    expect(await screen.findByText(/Arrived from another section: Second take/)).toBeTruthy();
   });
 });

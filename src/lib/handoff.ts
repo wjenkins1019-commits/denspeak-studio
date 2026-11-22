@@ -383,7 +383,16 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
 
 /** What came of asking for the next queued take. */
 export type HandoffClaim =
-  | { status: 'taken'; item: HandoffItem }
+  | {
+      status: 'taken';
+      item: HandoffItem;
+      /**
+       * Put the take back without showing it, for a section that is gone
+       * before the delete lands: navigating away unmounts the view its
+       * arrival would have landed in.
+       */
+      release: () => void;
+    }
   | { status: 'empty' }
   | { status: 'failed' };
 
@@ -394,7 +403,10 @@ export type HandoffClaim =
  */
 export async function claimHandoff(target: HandoffTarget): Promise<HandoffClaim> {
   const claim = await claimStoredTake(target);
-  if (claim.status === 'taken') return { status: 'taken', item: claim.entry.item };
+  if (claim.status === 'taken') {
+    const entry = claim.entry;
+    return { status: 'taken', item: entry.item, release: () => putBackHandoff(target, entry) };
+  }
   return claim.status === 'failed' ? { status: 'failed' } : { status: 'empty' };
 }
 

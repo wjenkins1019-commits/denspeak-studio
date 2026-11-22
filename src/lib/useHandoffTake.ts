@@ -89,6 +89,18 @@ export function useHandoffTake<S>(
   // replace one another — one take taken without ever being seen.
   const claiming = useRef(false);
 
+  // Whether the view is still mounted. A Next-take claim can land after it is
+  // gone: navigating away unmounts the section, and React drops the arrival
+  // the delete resolves with. The take is put back rather than lost with it.
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
   /** Land `item`, then take stock of what is still queued behind it. */
   function deliver(item: HandoffItem) {
     const before = latest.current.current;
@@ -110,7 +122,10 @@ export function useHandoffTake<S>(
 
     void claimHandoff(target).then((claim) => {
       claiming.current = false;
-      if (claim.status === 'taken') deliver(claim.item);
+      if (claim.status === 'taken') {
+        if (alive.current) deliver(claim.item);
+        else claim.release();
+      }
       else if (claim.status === 'failed') setFailed(true);
       else {
         setFailed(false);
