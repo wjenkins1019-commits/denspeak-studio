@@ -159,7 +159,7 @@ export function QueuePanel({
             button's own name changes under the focus the press left on it, or a
             refusal, which as its own region would speak over this one. The count
             above sits outside it and is still there to be read. */}
-        <p className="muted queue-news" role="status" aria-atomic="true">
+        <p className="queue-news" role="status" aria-atomic="true">
           {news}
         </p>
 
