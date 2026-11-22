@@ -142,10 +142,14 @@ const RAW_COLOUR = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/gi;
 const THEMED_VALUE =
   /^(var\(--[a-z0-9-]+\)|transparent|currentColor|none|inherit|unset|undefined|url\(#|(?:linear|radial|conic)-gradient\()/i;
 
-const COLOUR_ATTR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=(["'])([^"']*)\2/g;
-const COLOUR_ATTR_EXPR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=\{/g;
-const COLOUR_PROP =
-  /\b(color|backgroundColor|background|borderColor|outlineColor|textDecorationColor|fill|stroke|stopColor|floodColor|caretColor)\s*:\s*/g;
+/** Keys that paint: SVG attributes first, then the wider style properties. */
+const ATTR_KEYS = ['fill', 'stroke', 'stopColor', 'floodColor', 'color', 'caretColor'];
+const STYLE_KEYS = ['backgroundColor', 'background', 'borderColor', 'outlineColor', 'textDecorationColor', ...ATTR_KEYS];
+const ATTRIBUTES = ATTR_KEYS.join('|');
+
+const COLOUR_ATTR = new RegExp(`\\b(${ATTRIBUTES})=(["'])([^"']*)\\2`, 'g');
+const COLOUR_ATTR_EXPR = new RegExp(`\\b(${ATTRIBUTES})=\\{`, 'g');
+const COLOUR_PROP = new RegExp(`\\b(${STYLE_KEYS.join('|')})\\s*:\\s*`, 'g');
 const QUOTED = /(['"`])((?:[^'"`\\]|\\.)*)\1/g;
 
 /**
@@ -176,15 +180,27 @@ const NAMED_COLOURS = new Set(
     .filter(Boolean),
 );
 
+const namesColour = (value: string) => NAMED_COLOURS.has(value.trim().toLowerCase());
+
 /**
  * The value of a property, cut where the property ends rather than at the next
  * quote. Brackets and strings are counted so a comma inside a call does not end
  * it early — a depth counter, not a parser.
+ *
+ * A newline at depth 0 also ends it. That keeps a value from running into the
+ * rest of the file (a CSS snippet built in a string, say) at the cost of not
+ * reading an expression broken onto a second line after its first token; every
+ * colour position in the app is written on one line.
  */
-function valueAt(text: string, start: number): { value: string; at: number } {
+function valueAt(text: string, from: number): { value: string; at: number } {
+  // Leading whitespace belongs to the layout, not the value: an attribute
+  // written `fill={` over several lines still starts at its expression.
+  let i = from;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  const at = i;
+
   let depth = 0;
   let quote: string | null = null;
-  let i = start;
 
   while (i < text.length) {
     const char = text[i];
@@ -222,8 +238,7 @@ function valueAt(text: string, start: number): { value: string; at: number } {
     i += 1;
   }
 
-  const raw = text.slice(start, i);
-  return { value: raw.trim(), at: start + (raw.length - raw.trimStart().length) };
+  return { value: text.slice(at, i).trim(), at };
 }
 
 /** Every source module under `dir`: components and plain modules alike. */
@@ -354,7 +369,7 @@ function inlineColours(label: string, source: string): string[] {
   /** A colour named inside an expression: `hot ? 'red' : undefined`. */
   const flagNames = (value: string, at: number, property: string) => {
     for (const inner of value.matchAll(QUOTED)) {
-      if (!NAMED_COLOURS.has(inner[2].trim().toLowerCase())) continue;
+      if (!namesColour(inner[2])) continue;
       note(at + (inner.index ?? 0), `${property}: ${inner[0]}`);
     }
   };
@@ -380,10 +395,9 @@ function inlineColours(label: string, source: string): string[] {
     // strings only matter if one of them names a colour.
     if (single) {
       if (!THEMED_VALUE.test(single[2].trim())) note(at, `${match[1]}: ${single[0]}`);
-      continue;
+    } else {
+      flagNames(value, at, match[1]);
     }
-
-    flagNames(value, at, match[1]);
   }
 
   // A bare name is a colour too: `export const TINT = 'white'` has no property
@@ -392,8 +406,7 @@ function inlineColours(label: string, source: string): string[] {
   // against the property that gave it context.
   for (const match of text.matchAll(QUOTED)) {
     const index = match.index ?? 0;
-    if (reported.has(index)) continue;
-    if (!NAMED_COLOURS.has(match[2].trim().toLowerCase())) continue;
+    if (reported.has(index) || !namesColour(match[2])) continue;
     note(index, match[0]);
   }
 
@@ -513,10 +526,29 @@ describe('what the scans read', () => {
     ]);
   });
 
+  it('reads an attribute expression that spans several lines', () => {
+    const source = [
+      '<svg',
+      '  fill={',
+      "    hot ? 'red' : 'var(--line)'",
+      '  }',
+      '/>',
+    ].join('\n');
+
+    expect(inlineColours('Mark.tsx', source)).toEqual(["Mark.tsx:3  fill: 'red'"]);
+  });
+
   it('leaves a comparison alone when it picks between tokens', () => {
     const source = "const s = { color: theme === 'light' ? 'var(--text)' : 'var(--text-2)' };";
 
     expect(inlineColours('Tint.tsx', source)).toEqual([]);
+  });
+
+  it('finds a colour a component hands to an attribute', () => {
+    expect(inlineColours('Mark.tsx', '<rect fill="#0a0b0c" />')).toEqual([
+      'Mark.tsx:1  fill="#0a0b0c"',
+      'Mark.tsx:1  #0a0b0c',
+    ]);
   });
 
   it('finds a bare colour name in a plain module', () => {
