@@ -146,6 +146,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A test that fails with the clock frozen must not freeze the next one.
+  vi.useRealTimers();
   cleanup();
   clearHandoff();
   setHandoffStore(null);
@@ -510,7 +512,7 @@ describe('hand-off navigation', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     });
 
-    expect(await screen.findByText(/Arrived from another section: A take/)).toBeTruthy();
+    expect(screen.getByText(/Arrived from another section: A take/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(store.rows.size).toBe(0);
   });
@@ -586,13 +588,17 @@ describe('hand-off navigation', () => {
 
     const discard = screen.getByRole('button', { name: 'Discard A take' });
     discard.focus();
+    // The clock is the flaky part under load, not the refusal: freeze it and
+    // run past the deadline instead of waiting out real milliseconds.
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.click(discard);
+      await vi.advanceTimersByTimeAsync(50);
     });
 
     // The row would not clear, so it is still listed and the panel says why
     // instead of sitting on a Discard button that appeared to do nothing.
-    expect(await screen.findByText(/its saved copy is still there/)).toBeTruthy();
+    expect(screen.getByText(/its saved copy is still there/)).toBeTruthy();
     expect(panel.textContent).toContain('A take');
     expect(panel.textContent).toContain('Another take');
     expect(store.rows.size).toBe(2);
@@ -610,16 +616,19 @@ describe('hand-off navigation', () => {
     store.removes.length = 0;
     const clear = screen.getByRole('button', { name: 'Clear all 4' });
     clear.focus();
+    // Frozen clock, run past the one deadline: the timer is what the kept
+    // rows turn on, and under load the clock is the flaky part.
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.click(clear);
+      await vi.advanceTimersByTimeAsync(50);
     });
 
     // The first hung delete spends the clear's whole budget, so the rest are
     // kept without a delete being asked for. Waiting per row, as the loop did
     // before, asked for one per take and held the panel for a deadline each.
-    // What matters is that the clear asked for fewer deletes than it had rows;
-    // the exact count and the elapsed time both turn on when the timer fires.
-    expect(await screen.findByText(/Couldn’t remove 4 takes/)).toBeTruthy();
+    // What matters is that the clear asked for fewer deletes than it had rows.
+    expect(screen.getByText(/Couldn’t remove 4 takes/)).toBeTruthy();
     expect(store.removes.length).toBeGreaterThanOrEqual(1);
     expect(store.removes.length).toBeLessThan(4);
     expect(panel.textContent).toContain('Fourth take');
@@ -632,7 +641,8 @@ describe('hand-off navigation', () => {
     const panel = await openSongQueue(['A take', 'Another take'], store);
     setClearTimeout(20);
 
-    // Synchronous, so the deadline cannot pass between the press and the check.
+    // Frozen clock, so no deadline can pass between the presses and the checks.
+    vi.useFakeTimers();
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
     });
@@ -647,9 +657,13 @@ describe('hand-off navigation', () => {
 
     expect(screen.getByRole('button', { name: 'Clearing…' })).toBeTruthy();
 
-    // Both end in the clear's note, and both go back to their ordinary label: a
-    // busy state that outlived its wait would leave the panel stuck on it.
-    expect(await screen.findByText(/Couldn’t remove 2 takes/)).toBeTruthy();
+    // Both deadlines pass without waiting out the clock, and both go back to
+    // their ordinary label: a busy state that outlived its wait would leave
+    // the panel stuck on it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(screen.getByText(/Couldn’t remove 2 takes/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Discarding A take' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Discard A take' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear all 2' })).toBeTruthy();
@@ -665,7 +679,8 @@ describe('hand-off navigation', () => {
     const news = within(panel).getByRole('status');
     expect(news.textContent).toBe('');
 
-    // Synchronous, so the deadline cannot pass between the press and the check.
+    // Frozen clock, so no deadline can pass between the press and the check.
+    vi.useFakeTimers();
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
     });
@@ -682,10 +697,13 @@ describe('hand-off navigation', () => {
     // beside the clear, not in a second region or on the button alone.
     expect(news.textContent).toBe('Discarding “A take”. Clearing 2 takes.');
 
-    // Both settle into the clear's refusal, said in the one line: no busy text
-    // left to read as work that never finished, and no second region to speak
-    // the refusal over it.
-    expect(await screen.findByText(/Couldn’t remove 2 takes/)).toBeTruthy();
+    // Both deadlines pass without waiting out the clock, settling into the
+    // clear's refusal, said in the one line: no busy text left to read as work
+    // that never finished, and no second region to speak the refusal over it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(screen.getByText(/Couldn’t remove 2 takes/)).toBeTruthy();
     expect(within(panel).getAllByRole('status')).toHaveLength(1);
     expect(news.textContent).toContain('Couldn’t remove 2 takes');
     expect(news.textContent).not.toContain('Clearing');
@@ -698,6 +716,8 @@ describe('hand-off navigation', () => {
     setClearTimeout(100);
 
     const news = within(panel).getByRole('status');
+    // Frozen clock, so the hung delete can only end by advancing past it.
+    vi.useFakeTimers();
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
     });
@@ -722,7 +742,7 @@ describe('hand-off navigation', () => {
     // The hung delete reaches its deadline rather than outliving the test, and
     // it is its refusal that then stands.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await vi.advanceTimersByTimeAsync(150);
     });
     expect(news.textContent).toContain('Couldn’t remove “A take”');
   });
@@ -742,13 +762,17 @@ describe('hand-off navigation', () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
     });
 
+    // Frozen clock, run past the deadline instead of waiting out real
+    // milliseconds for the hung delete to be reported.
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+      await vi.advanceTimersByTimeAsync(50);
     });
 
     // A delete that never answers used to leave the section silent, the take
     // caught between queued and shown. It is still queued, so it says so.
-    expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+    expect(screen.getByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
     expect(store.rows.size).toBe(1);
   });
@@ -767,19 +791,26 @@ describe('hand-off navigation', () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
     });
 
+    // Frozen clock, run past the deadline instead of waiting out real
+    // milliseconds for the hung delete to be reported.
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+      await vi.advanceTimersByTimeAsync(50);
     });
 
     // The first delete hangs, so the take stays queued and the section says so;
     // it has to still be claimable once the store starts answering.
-    expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+    expect(screen.getByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     });
 
-    expect(await screen.findByText(/Arrived from another section: A take/)).toBeTruthy();
+    // No deadline involved once the store answers: the claim resolves in
+    // microtasks the act above flushes, but findBy's polling runs on the
+    // frozen clock, so read it directly.
+    expect(screen.getByText(/Arrived from another section: A take/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(store.rows.size).toBe(0);
   });
