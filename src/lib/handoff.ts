@@ -113,6 +113,14 @@ interface Pending {
   key: string;
   /** When it was sent, kept so putting a claimed take back does not reorder it. */
   at: number;
+  /**
+   * Whether this run read the take back from storage. Only those takes are
+   * shared with other tabs: the row is the shared truth, so a hydrated take
+   * is delivered only while its row is still there. A take this run sent may
+   * still be landing in this tab's write queue, so its row missing proves
+   * nothing about another tab.
+   */
+  hydrated: boolean;
 }
 
 /**
@@ -224,7 +232,7 @@ function hydrate(): Promise<void> {
           if (held.has(row.key)) continue;
 
           const list = byTarget.get(row.target) ?? [];
-          list.unshift({ item: row.item, key: row.key, at: row.at });
+          list.unshift({ item: row.item, key: row.key, at: row.at, hydrated: true });
           byTarget.set(row.target, list);
         }
 
@@ -274,8 +282,8 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const at = Date.now();
   const queue = pending.get(target);
-  if (queue) queue.push({ item, key, at });
-  else pending.set(target, [{ item, key, at }]);
+  if (queue) queue.push({ item, key, at, hydrated: false });
+  else pending.set(target, [{ item, key, at, hydrated: false }]);
 
   queuesChanged();
 
@@ -397,7 +405,59 @@ function withinTimeout(work: Promise<void>, ms: number): Promise<void> {
   });
 }
 
+interface ClaimLock {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * The cross-tab lock, when the browser has one. Web Locks serialize tabs
+ * holding the same name, which is what makes the check-then-delete below
+ * atomic across tabs; without it there is no shared primitive to hold.
+ */
+function claimLock(): ClaimLock | null {
+  const locks = (globalThis as unknown as { navigator?: { locks?: ClaimLock } }).navigator?.locks;
+  return locks && typeof locks.request === 'function' ? locks : null;
+}
+
+/**
+ * Hold the cross-tab lock for `key` while claiming it, so two tabs taking the
+ * same stored take serialize: the loser finds the row gone instead of
+ * deleting nothing and delivering its stale copy. Without Web Locks the take
+ * is claimed as before.
+ */
+function withClaimLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const locks = claimLock();
+  if (!locks) return work();
+  return locks.request(`chatter-box-handoff-take-${key}`, work);
+}
+
 async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
+  for (;;) {
+    const head = pending.get(target)?.[0];
+    if (!head) return { status: 'empty' };
+
+    // A hydrated take may have been claimed by another tab since: only the
+    // tab that deletes the row may deliver it, so the row is checked inside
+    // the cross-tab lock. The loser drops its stale copy and tries whatever
+    // is queued behind it. A take this run sent skips the check — its put
+    // may still be landing in this tab's write queue — and is claimed as
+    // before. A lock that will not grant falls back the same way rather
+    // than leave the take stuck.
+    if (head.hydrated && claimLock()) {
+      try {
+        const outcome = await claimHydratedHead(target, head);
+        if (outcome.status !== 'stolen') return outcome;
+      } catch {
+        return claimHead(target);
+      }
+      continue;
+    }
+
+    return claimHead(target);
+  }
+}
+
+async function claimHead(target: HandoffTarget): Promise<Claim> {
   const entry = claimQueued(target);
   if (!entry) return { status: 'empty' };
 
@@ -416,6 +476,52 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
     if (left <= 0) claimingTargets.delete(target);
     else claimingTargets.set(target, left);
   }
+}
+
+/**
+ * Claim a take this run hydrated, holding its cross-tab lock. Answers
+ * `stolen` when the row is already gone — another tab claimed or discarded
+ * it, or it was pruned — after dropping this tab's stale copy so it can
+ * never be replayed. Storage that will not answer leaves the take to the
+ * normal claim, since its absence then proves nothing.
+ */
+async function claimHydratedHead(
+  target: HandoffTarget,
+  head: Pending,
+): Promise<Claim | { status: 'stolen' }> {
+  return withClaimLock(head.key, async () => {
+    // Gone from this tab while the lock was waited for — discarded, or taken
+    // by a claim that got there first — so there is nothing for this one.
+    const queued = pending.get(target)?.some((entry) => entry.key === head.key);
+    if (!queued) return { status: 'empty' };
+
+    let rows: HandoffRecord[] | null = null;
+    try {
+      rows = await store.list();
+    } catch {
+      rows = null;
+    }
+    if (rows && !rows.some((row) => row.key === head.key)) {
+      dropStolen(target, head.key);
+      return { status: 'stolen' };
+    }
+
+    const entry = takeQueuedByKey(target, head.key);
+    if (!entry) return { status: 'empty' };
+
+    claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
+    try {
+      await withinTimeout(removeStored(entry.key), clearTimeoutMs);
+      return { status: 'taken', entry };
+    } catch {
+      restoreQueued(target, entry);
+      return { status: 'failed' };
+    } finally {
+      const left = (claimingTargets.get(target) ?? 0) - 1;
+      if (left <= 0) claimingTargets.delete(target);
+      else claimingTargets.set(target, left);
+    }
+  });
 }
 
 /** What came of asking for the next queued take. */
@@ -458,6 +564,37 @@ function claimQueued(target: HandoffTarget): Pending | null {
   consumed.add(entry.key);
   queuesChanged();
   return entry;
+}
+
+/** Take one entry out of the queue by key, wherever it sits in it. */
+function takeQueuedByKey(target: HandoffTarget, key: string): Pending | null {
+  const queue = pending.get(target);
+  if (!queue) return null;
+  const index = queue.findIndex((entry) => entry.key === key);
+  if (index < 0) return null;
+  const [entry] = queue.splice(index, 1);
+  if (queue.length === 0) pending.delete(target);
+  // Blocks a late hydration from reading the row back while the delete is in
+  // flight.
+  consumed.add(entry.key);
+  queuesChanged();
+  return entry;
+}
+
+/**
+ * Drop a hydrated take whose row is already gone — claimed or discarded by
+ * another tab, or pruned — so this tab never replays its stale copy. The key
+ * stays consumed so a late hydration cannot read it back.
+ */
+function dropStolen(target: HandoffTarget, key: string): void {
+  const queue = pending.get(target);
+  if (queue) {
+    const index = queue.findIndex((entry) => entry.key === key);
+    if (index >= 0) queue.splice(index, 1);
+    if (queue.length === 0) pending.delete(target);
+  }
+  consumed.add(key);
+  queuesChanged();
 }
 
 function restoreQueued(target: HandoffTarget, entry: Pending): void {

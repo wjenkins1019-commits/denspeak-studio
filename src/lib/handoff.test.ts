@@ -391,6 +391,68 @@ describe('durable queue', () => {
     expect(await takeHandoff('convert')).toBeNull();
   });
 
+  it('does not deliver a stored take another tab claimed first', async () => {
+    // Two tabs open on the same section share the row, not the queue: this
+    // tab hydrated it, then the other tab took it — the row is gone while
+    // this tab's copy is still queued. Only the winner may deliver it.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = {
+      request: (_name: string, work: () => Promise<unknown>) => work(),
+    };
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      expect(store.rows.size).toBe(1);
+
+      // A reload in this tab hydrates the stored row...
+      clearHandoff();
+      await hydrateHandoff();
+      expect(pendingCount('convert')).toBe(1);
+
+      // ...then the other tab takes it: the row is gone, this copy is stale.
+      const [row] = [...store.rows.keys()];
+      await store.remove(row);
+      expect(store.rows.size).toBe(0);
+
+      // Exactly once means the loser hands over nothing and drops its stale
+      // copy instead of replaying it on a later visit.
+      expect(await takeHandoff('convert')).toBeNull();
+      expect(pendingCount('convert')).toBe(0);
+
+      clearHandoff();
+      await hydrateHandoff();
+      expect(pendingCount('convert')).toBe(0);
+      expect(await takeHandoff('convert')).toBeNull();
+    } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
+  it('delivers a stored take no other tab claimed', async () => {
+    // The guard above must not swallow a take nobody else took: the row is
+    // still there, so this tab hands it over as before.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = {
+      request: (_name: string, work: () => Promise<unknown>) => work(),
+    };
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+
+      clearHandoff();
+      await hydrateHandoff();
+
+      expect(await takeHandoff('convert')).toEqual(item);
+      expect(store.rows.size).toBe(0);
+    } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
   it('deletes the row before handing the take over, so a take is never replayed', async () => {
     // The crash tradeoff, pinned. The loss window runs from the row's delete
     // resolving to the caller applying the take, with no awaits in between
