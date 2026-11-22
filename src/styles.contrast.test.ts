@@ -91,12 +91,81 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['--warm', '--bg-2'],
   // The EQ graph's readout label sits on its own chip.
   ['--text', '--readout'],
+  // The danger note sits on its own tinted box, not on the page.
+  ['--danger-text', '--danger-bg'],
+  // Cards, panels and the rail's active item are translucent surfaces with
+  // labels on them, measured over the page they are painted on.
+  ['--text', '--panel'],
+  ['--text', '--panel-strong'],
+  ['--text', '--surface'],
+  ['--text', '--surface-soft'],
+  ['--text', '--active-soft'],
+  ['--text', '--active-strong'],
 ];
+
+/** Ends of the fill the primary button and the rail count are painted with. */
+const ACCENT_FILLS = ['--accent-2', '--accent'];
+
+/** Surfaces the focus ring is drawn against. */
+const RING_SURFACES = ['--bg', '--bg-2'];
 
 const THEMES = [
   { theme: 'dark', selector: ':root {' },
   { theme: 'light', selector: ":root[data-theme='light'] {" },
 ];
+
+/** Token names a theme block defines. */
+const tokensIn = (block: string) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]);
+
+/**
+ * Tokens that paint no colour of their own: lines and borders, shadows and
+ * glows, the page's background image, geometry, and the rail's translucent
+ * washes, which read as --bg beneath the labels on them.
+ */
+const NOT_TEXT = new Set([
+  '--radius',
+  '--rail',
+  '--line',
+  '--line-soft',
+  '--line-strong',
+  '--danger-border',
+  '--glass-inner',
+  '--glow',
+  '--bg-image',
+  '--rail-bg',
+  '--active-nav',
+  '--shadow-card',
+  '--shadow-brand',
+]);
+
+/** Every token a check above names, directly or as a surface it measures. */
+const MEASURED = new Set<string>([
+  ...TEXT_PAIRS.flat(),
+  ...ACCENT_FILLS,
+  ...RING_SURFACES,
+  '--primary-text',
+  '--hint-bg',
+]);
+
+/**
+ * A token added to a theme and forgotten would paint text nothing measures, so
+ * every token has to be named by a pair above or declared as painting no text.
+ */
+describe('token coverage', () => {
+  const defined = new Set([
+    ...tokensIn(tokenBlock(':root {')),
+    ...tokensIn(tokenBlock(":root[data-theme='light'] {")),
+  ]);
+
+  it('measures every token, or records why it needs no measurement', () => {
+    const unaccounted = [...defined].filter((name) => !MEASURED.has(name) && !NOT_TEXT.has(name));
+    expect(unaccounted, 'tokens with no pair and no exemption').toEqual([]);
+  });
+
+  it('keeps the not-text list to tokens that exist', () => {
+    expect([...NOT_TEXT].filter((name) => !defined.has(name))).toEqual([]);
+  });
+});
 
 type Literal = { selector: string; property: string; value: string };
 
@@ -680,10 +749,17 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
   const surfaces: Record<string, Colour> = {
     '--bg': token(block, '--bg'),
     '--bg-2': token(block, '--bg-2'),
-    // The hint box sits on a card, so its translucent fill is measured there.
+    // Translucent surfaces are measured where they are painted: on a card for
+    // the hint and danger boxes, on the page for the rest.
     '--hint': over(token(block, '--hint-bg'), token(block, '--bg-2')),
-    // The readout chip sits on the graph canvas, so its fill is measured there.
+    '--danger-bg': over(token(block, '--danger-bg'), token(block, '--bg-2')),
     '--readout': over(token(block, '--readout'), token(block, '--bg')),
+    '--panel': over(token(block, '--panel'), token(block, '--bg')),
+    '--panel-strong': over(token(block, '--panel-strong'), token(block, '--bg')),
+    '--surface': over(token(block, '--surface'), token(block, '--bg')),
+    '--surface-soft': over(token(block, '--surface-soft'), token(block, '--bg')),
+    '--active-soft': over(token(block, '--active-soft'), token(block, '--bg')),
+    '--active-strong': over(token(block, '--active-strong'), token(block, '--bg')),
   };
 
   it.each(TEXT_PAIRS)('keeps %s readable on %s', (fgToken, bgToken) => {
@@ -695,7 +771,7 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
     // The primary button fills with --accent-2 to --accent; the rail's count is
     // --accent alone. The text has to clear AA against every end of that.
     const text = token(block, '--primary-text');
-    for (const fill of ['--accent-2', '--accent']) {
+    for (const fill of ACCENT_FILLS) {
       const ratio = contrast(text, token(block, fill));
       expect(ratio, `--primary-text on ${fill} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
     }
@@ -705,7 +781,7 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
     // A non-text indicator only needs 3:1, but it is drawn in the same teal as
     // the labels, so it should not be the thing that looks faint. On the page it
     // is the rail count's ring; on the panel, the QueuePanel buttons'.
-    for (const surface of ['--bg', '--bg-2']) {
+    for (const surface of RING_SURFACES) {
       const ratio = contrast(token(block, '--accent-2'), token(block, surface));
       expect(ratio, `--accent-2 on ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
     }
