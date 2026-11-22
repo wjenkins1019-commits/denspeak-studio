@@ -72,6 +72,12 @@ export default function App() {
   const [queuePanel, setQueuePanel] = useState<HandoffTarget | null>(null);
   // Why a take the panel offered to throw away is still listed.
   const [queueNote, setQueueNote] = useState<string | null>(null);
+  // What the panel is waiting on: rows whose delete is in flight, and a clear
+  // under way. Kept above the panel so a slow store shows work, not stillness.
+  const [queueBusy, setQueueBusy] = useState<{ discards: string[]; clearing: boolean }>({
+    discards: [],
+    clearing: false,
+  });
   const queueReturn = useRef<HTMLButtonElement | null>(null);
   // One live region speaks for the rail; it only carries increases.
   const [announcement, setAnnouncement] = useState('');
@@ -125,6 +131,9 @@ export default function App() {
     const target = queuePanel;
     const trigger = queueReturn.current;
     setQueueNote(null);
+    // Nothing is left on screen to be busy for; work still in flight resolves
+    // into a closed panel and settles this again on its own.
+    setQueueBusy({ discards: [], clearing: false });
     setQueuePanel(null);
     // Back to the count that opened it; clearing a queue removes that control,
     // so the section's own rail entry is the fallback.
@@ -136,33 +145,49 @@ export default function App() {
 
   const discardQueued = useCallback(
     async (key: string) => {
-      if (!queuePanel) return;
+      if (!queuePanel || queueBusy.discards.includes(key)) return;
       setQueueNote(null);
       const name = queuedTakes(queuePanel).find((take) => take.key === key)?.name;
-      // The row goes first; a take whose delete failed stays queued, and saying
-      // so beats a Discard button that looks as if it did nothing.
-      if (await discardHandoff(queuePanel, key)) return;
-      setQueueNote(
-        `Couldn’t remove ${name ? `“${name}”` : 'that take'} — its saved copy is still there, so it is still waiting.`,
-      );
+      // A delete can take seconds when the store hangs, so the row says it is
+      // working instead of looking as if the press did nothing. A second press
+      // on it while it waits is the same request, not another one.
+      setQueueBusy((busy) => ({ ...busy, discards: [...busy.discards, key] }));
+      try {
+        // The row goes first; a take whose delete failed stays queued, and
+        // saying so beats a Discard button that looks as if it did nothing.
+        if (await discardHandoff(queuePanel, key)) return;
+        setQueueNote(
+          `Couldn’t remove ${name ? `“${name}”` : 'that take'} — its saved copy is still there, so it is still waiting.`,
+        );
+      } finally {
+        setQueueBusy((busy) => ({
+          ...busy,
+          discards: busy.discards.filter((waiting) => waiting !== key),
+        }));
+      }
     },
-    [queuePanel],
+    [queueBusy.discards, queuePanel],
   );
 
   const clearQueued = useCallback(async () => {
-    if (!queuePanel) return;
+    if (!queuePanel || queueBusy.clearing) return;
     const queued = queuedTakes(queuePanel).length;
     setQueueNote(null);
-    const gone = await discardHandoffQueue(queuePanel);
-    if (gone >= queued) return;
+    setQueueBusy((busy) => ({ ...busy, clearing: true }));
+    try {
+      const gone = await discardHandoffQueue(queuePanel);
+      if (gone >= queued) return;
 
-    const left = queued - gone;
-    setQueueNote(
-      left === 1
-        ? 'Couldn’t remove 1 take — its saved copy is still there, so it is still waiting.'
-        : `Couldn’t remove ${left} takes — their saved copies are still there, so they are still waiting.`,
-    );
-  }, [queuePanel]);
+      const left = queued - gone;
+      setQueueNote(
+        left === 1
+          ? 'Couldn’t remove 1 take — its saved copy is still there, so it is still waiting.'
+          : `Couldn’t remove ${left} takes — their saved copies are still there, so they are still waiting.`,
+      );
+    } finally {
+      setQueueBusy((busy) => ({ ...busy, clearing: false }));
+    }
+  }, [queueBusy.clearing, queuePanel]);
 
   const openQueuedSection = useCallback(() => {
     if (!queuePanel) return;
@@ -288,6 +313,7 @@ export default function App() {
           label={NAV.find((item) => item.id === queuePanel)?.label ?? 'this section'}
           takes={queuedTakes(queuePanel)}
           note={queueNote}
+          busy={queueBusy}
           onDiscard={discardQueued}
           onClear={clearQueued}
           onOpen={openQueuedSection}

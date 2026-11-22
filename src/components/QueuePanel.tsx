@@ -14,6 +14,7 @@ export function QueuePanel({
   label,
   takes,
   note,
+  busy = { discards: [], clearing: false },
   onDiscard,
   onClear,
   onOpen,
@@ -23,6 +24,12 @@ export function QueuePanel({
   takes: QueuedTake[];
   /** Why a take that should have gone is still listed. */
   note?: string | null;
+  /**
+   * The rows whose delete is in flight, and whether a clear is. A store can
+   * take seconds to answer, so the row or the button says it is working rather
+   * than leaving the press looking as though it went nowhere.
+   */
+  busy?: { discards: string[]; clearing: boolean };
   onDiscard: (key: string) => void;
   onClear: () => void;
   onOpen: () => void;
@@ -139,28 +146,34 @@ export function QueuePanel({
         )}
 
         <ul className="queue-list" ref={list}>
-          {takes.map((take, index) => (
-            <li key={take.key}>
-              <div className="queue-take">
-                <strong>{take.name}</strong>
-                <small>
-                  {take.from ? `from ${sectionLabel(take.from)}` : 'queued'}
-                  {take.duration ? ` · ${formatDuration(take.duration)}` : ''}
-                </small>
-              </div>
-              <button
-                className="btn ghost small"
-                data-discard={take.key}
-                aria-label={`Discard ${take.name}`}
-                onClick={() => {
-                  removal.current = { key: take.key, index, count: takes.length };
-                  onDiscard(take.key);
-                }}
-              >
-                Discard
-              </button>
-            </li>
-          ))}
+          {takes.map((take, index) => {
+            const discarding = busy.discards.includes(take.key);
+
+            return (
+              <li key={take.key}>
+                <div className="queue-take">
+                  <strong>{take.name}</strong>
+                  <small>
+                    {take.from ? `from ${sectionLabel(take.from)}` : 'queued'}
+                    {take.duration ? ` · ${formatDuration(take.duration)}` : ''}
+                  </small>
+                </div>
+                {/* Left pressable while it waits: disabling the button the press
+                    is on would drop focus out of the panel. */}
+                <button
+                  className="btn ghost small"
+                  data-discard={take.key}
+                  aria-label={discarding ? `Discarding ${take.name}` : `Discard ${take.name}`}
+                  onClick={() => {
+                    removal.current = { key: take.key, index, count: takes.length };
+                    onDiscard(take.key);
+                  }}
+                >
+                  {discarding ? 'Discarding…' : 'Discard'}
+                </button>
+              </li>
+            );
+          })}
         </ul>
 
         <div className="queue-actions">
@@ -175,7 +188,7 @@ export function QueuePanel({
                 onClear();
               }}
             >
-              Clear all {takes.length}
+              {busy.clearing ? 'Clearing…' : `Clear all ${takes.length}`}
             </button>
           )}
         </div>

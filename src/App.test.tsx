@@ -66,6 +66,8 @@ class StubbornStore implements HandoffStore {
 /** Storage whose deletes never answer, standing in for a store that hangs. */
 class HungStore implements HandoffStore {
   readonly rows = new Map<string, HandoffRecord>();
+  /** Every key a delete was asked for, so a test can see how many were tried. */
+  readonly removes: string[] = [];
 
   async list(): Promise<HandoffRecord[]> {
     return [...this.rows.values()].sort((a, b) => a.at - b.at);
@@ -75,7 +77,8 @@ class HungStore implements HandoffStore {
     this.rows.set(record.key, record);
   }
 
-  remove(): Promise<void> {
+  remove(key: string): Promise<void> {
+    this.removes.push(key);
     return new Promise(() => {});
   }
 }
@@ -486,24 +489,52 @@ describe('hand-off navigation', () => {
       ['A take', 'Another take', 'Third take', 'Fourth take'],
       store,
     );
-    // Long enough that a wait per row would plainly exceed it four times over.
-    setClearTimeout(200);
+    setClearTimeout(20);
 
+    store.removes.length = 0;
     const clear = screen.getByRole('button', { name: 'Clear all 4' });
     clear.focus();
-    const started = Date.now();
     await act(async () => {
       fireEvent.click(clear);
     });
 
     // The first hung delete spends the clear's whole budget, so the rest are
-    // kept without a wait each: the panel answers in the time one delete gets,
-    // not four, and still says why every row is listed.
+    // kept without a delete being asked for. Asking once per row, as the waits
+    // did before, is what held the panel for a deadline per take.
     expect(await screen.findByText(/Couldn’t remove 4 takes/)).toBeTruthy();
-    expect(Date.now() - started).toBeLessThan(550);
+    expect(store.removes.length).toBe(1);
     expect(panel.textContent).toContain('Fourth take');
     expect(store.rows.size).toBe(4);
     expect(document.activeElement).toBe(clear);
+  });
+
+  it('says a delete and a clear are under way while the store hangs', async () => {
+    const store = new HungStore();
+    const panel = await openSongQueue(['A take', 'Another take'], store);
+    setClearTimeout(20);
+
+    // Synchronous, so the deadline cannot pass between the press and the check.
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
+    });
+
+    // The press would otherwise sit on an unchanged button for as long as the
+    // store takes, looking as though it had not been heard.
+    expect(screen.getByRole('button', { name: 'Discarding A take' })).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear all 2' }));
+    });
+
+    expect(screen.getByRole('button', { name: 'Clearing…' })).toBeTruthy();
+
+    // Both end in the clear's note, and both go back to their ordinary label: a
+    // busy state that outlived its wait would leave the panel stuck on it.
+    expect(await screen.findByText(/Couldn’t remove 2 takes/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Discarding A take' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Discard A take' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear all 2' })).toBeTruthy();
+    expect(panel.textContent).toContain('Another take');
   });
 
   it('says a take could not be opened when the store hangs instead of refusing', async () => {
