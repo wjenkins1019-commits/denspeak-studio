@@ -334,12 +334,46 @@ type Claim =
  * A failed delete puts the take back: the row may survive, and applying a take
  * whose row is still there is exactly what brings it back next run.
  */
+/**
+ * How long a stored row may take to clear before the take is reported as not
+ * opening. A store that never answers would otherwise leave a section silent
+ * with the take stuck: neither shown, nor said to be still waiting.
+ */
+const DEFAULT_CLEAR_TIMEOUT_MS = 5000;
+
+let clearTimeoutMs = DEFAULT_CLEAR_TIMEOUT_MS;
+
+/** Shorten the wait above, so a test does not have to sit through it. */
+export function setClearTimeout(ms?: number): void {
+  clearTimeoutMs = ms ?? DEFAULT_CLEAR_TIMEOUT_MS;
+}
+
+/** `work`, or a rejection once `ms` passes without it settling. */
+function withinTimeout(work: Promise<void>, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('the row would not clear')), ms);
+    work.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
   const entry = claimQueued(target);
   if (!entry) return { status: 'empty' };
 
   try {
-    await store.remove(entry.key);
+    // A delete that never answers is no better than one that refuses: the row
+    // is still on disk, so the take stays queued and the section has to say so
+    // rather than sit silent with the take caught between queued and shown.
+    await withinTimeout(store.remove(entry.key), clearTimeoutMs);
     return { status: 'taken', entry };
   } catch {
     restoreQueued(target, entry);

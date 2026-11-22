@@ -8,7 +8,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { clearHandoff, sendHandoff, sendTake, setHandoffStore } from './lib/handoff';
+import { clearHandoff, sendHandoff, sendTake, setClearTimeout, setHandoffStore } from './lib/handoff';
 import type { HandoffRecord, HandoffStore } from './lib/handoffStore';
 
 vi.mock('./lib/tts', () => ({
@@ -63,6 +63,23 @@ class StubbornStore implements HandoffStore {
   }
 }
 
+/** Storage whose deletes never answer, standing in for a store that hangs. */
+class HungStore implements HandoffStore {
+  readonly rows = new Map<string, HandoffRecord>();
+
+  async list(): Promise<HandoffRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: HandoffRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  remove(): Promise<void> {
+    return new Promise(() => {});
+  }
+}
+
 beforeEach(() => {
   clearHandoff();
   // Set the starting route without the event a hash assignment would leave
@@ -82,11 +99,40 @@ afterEach(() => {
   cleanup();
   clearHandoff();
   setHandoffStore(null);
+  setClearTimeout();
   vi.unstubAllGlobals();
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
   window.history.replaceState(null, '', window.location.pathname);
 });
+
+/**
+ * The setup every panel test shares: the app, takes queued for Song while the
+ * route is elsewhere, and the panel opened from the rail count. Each test then
+ * says only what it does to the panel and what that should do.
+ */
+async function openSongQueue(names: string[], store?: HandoffStore): Promise<HTMLElement> {
+  if (store) setHandoffStore(store);
+  render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+  await act(async () => {});
+
+  await act(async () => {
+    names.forEach((name, index) => {
+      sendHandoff('song', { name, blob: new Blob([name]), duration: index + 1 });
+    });
+  });
+
+  const count = names.length === 1 ? '1 take' : `${names.length} takes`;
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${count} waiting for Song`) }));
+  });
+
+  return screen.getByRole('dialog', { name: 'Waiting for Song' });
+}
 
 describe('hand-off navigation', () => {
   it('swaps App to the section the take was sent to', async () => {
@@ -184,24 +230,8 @@ describe('hand-off navigation', () => {
   });
 
   it('discards queued takes one at a time, then clears the rest', async () => {
-    render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    );
+    const panel = await openSongQueue(['First take', 'Second take']);
 
-    await act(async () => {});
-
-    await act(async () => {
-      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
-      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
-    });
-
-    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
     // Everything a clear would throw away is named before it is offered.
     expect(panel.textContent).toContain('First take');
     expect(panel.textContent).toContain('Second take');
@@ -224,30 +254,14 @@ describe('hand-off navigation', () => {
   });
 
   it('keeps focus inside the panel as rows are discarded and cleared', async () => {
-    render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    );
-
-    await act(async () => {});
-
-    await act(async () => {
-      sendHandoff('song', { name: 'First take', blob: new Blob(['a']), duration: 1 });
-      sendHandoff('song', { name: 'Second take', blob: new Blob(['b']), duration: 2 });
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
-    });
+    const panel = await openSongQueue(['First take', 'Second take']);
 
     const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
     expect(document.activeElement).toBe(heading);
 
     // The empty result has its own standing live region, silent while takes are
     // still listed.
-    const dialog = screen.getByRole('dialog', { name: 'Waiting for Song' });
-    const emptyNews = within(dialog).getByRole('status');
+    const emptyNews = within(panel).getByRole('status');
     expect(emptyNews.textContent).toBe('');
 
     // The row the click lands on is gone with the click, so a pointer has
@@ -360,24 +374,8 @@ describe('hand-off navigation', () => {
 
   it('keeps a take the panel could not delete, and leaves focus where the reader has it', async () => {
     const store = new StubbornStore();
-    setHandoffStore(store);
-    render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    );
-    await act(async () => {});
+    const panel = await openSongQueue(['A take', 'Another take'], store);
 
-    await act(async () => {
-      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
-      sendHandoff('song', { name: 'Another take', blob: new Blob(['b']), duration: 2 });
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
-    });
-
-    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
     const discard = screen.getByRole('button', { name: 'Discard A take' });
     discard.focus();
     await act(async () => {
@@ -407,24 +405,8 @@ describe('hand-off navigation', () => {
 
   it('keeps every row when the store refuses a clear, and leaves focus where the reader has it', async () => {
     const store = new StubbornStore();
-    setHandoffStore(store);
-    render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    );
-    await act(async () => {});
+    const panel = await openSongQueue(['A take', 'Another take'], store);
 
-    await act(async () => {
-      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
-      sendHandoff('song', { name: 'Another take', blob: new Blob(['b']), duration: 2 });
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
-    });
-
-    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
     const clear = screen.getByRole('button', { name: 'Clear all 2' });
     clear.focus();
     await act(async () => {
@@ -451,6 +433,33 @@ describe('hand-off navigation', () => {
 
     expect(panel.textContent).toContain('Late take');
     expect(document.activeElement).toBe(heading);
+  });
+
+  it('says a take could not be opened when the store hangs instead of refusing', async () => {
+    const store = new HungStore();
+    setHandoffStore(store);
+    // The real wait is seconds long; what matters here is that it ends.
+    setClearTimeout(20);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+
+    // A delete that never answers used to leave the section silent, the take
+    // caught between queued and shown. It is still queued, so it says so.
+    expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+    expect(store.rows.size).toBe(1);
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {
