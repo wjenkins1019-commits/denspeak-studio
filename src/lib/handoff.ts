@@ -180,10 +180,56 @@ function removeStored(key: string): Promise<void> {
   return writes.then(() => store.remove(key));
 }
 
+/** Sections a stored row may name; anything else was written by nothing here. */
+const HANDOFF_TARGET_SET = new Set<string>(HANDOFF_TARGETS.map((entry) => entry.target));
+
+function isHandoffSource(value: unknown): value is HandoffSource {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(SECTION_LABELS, value);
+}
+
+/**
+ * Whether a stored row is one this app could have written: a keyed take for a
+ * real section with a usable item. Anything else is corruption — a foreign
+ * write, a half-landed record, tampering — and no section may be handed it.
+ */
+function isValidHandoffRecord(row: unknown): row is HandoffRecord {
+  if (!row || typeof row !== 'object') return false;
+  const candidate = row as Partial<HandoffRecord>;
+  if (typeof candidate.key !== 'string' || candidate.key.length === 0) return false;
+  if (typeof candidate.target !== 'string' || !HANDOFF_TARGET_SET.has(candidate.target)) return false;
+  if (typeof candidate.at !== 'number' || !Number.isFinite(candidate.at)) return false;
+  const item = candidate.item as Partial<HandoffItem> | null | undefined;
+  if (!item || typeof item !== 'object') return false;
+  if (typeof item.name !== 'string' || item.name.length === 0) return false;
+  if (typeof Blob !== 'undefined' && !(item.blob instanceof Blob)) return false;
+  if (item.duration !== undefined && (typeof item.duration !== 'number' || !Number.isFinite(item.duration)))
+    return false;
+  if (item.captions !== undefined) {
+    const captions = item.captions as { srt?: unknown; vtt?: unknown } | null;
+    if (
+      !captions ||
+      typeof captions !== 'object' ||
+      typeof captions.srt !== 'string' ||
+      typeof captions.vtt !== 'string'
+    )
+      return false;
+  }
+  if (item.from !== undefined && !isHandoffSource(item.from)) return false;
+  if (item.returned !== undefined && item.returned !== true) return false;
+  return true;
+}
+
+/** A stored row's key when it has one; corrupt rows without a key can only be skipped. */
+function corruptRowKey(row: unknown): string | null {
+  const key = (row as { key?: unknown } | null | undefined)?.key;
+  return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
 /**
  * Delete stored rows that are stale or over a section's limit, newest first so
  * the newest takes are the ones that survive. Storage only: the queues this
- * session holds are untouched.
+ * session holds are untouched. Rows no section could have written are deleted
+ * too, so they cannot sit on disk wedging every future hydration.
  */
 async function pruneStored(rows?: HandoffRecord[]): Promise<void> {
   try {
@@ -192,6 +238,15 @@ async function pruneStored(rows?: HandoffRecord[]): Promise<void> {
     const kept = new Map<HandoffTarget, number>();
 
     for (const row of [...all].reverse()) {
+      if (!isValidHandoffRecord(row)) {
+        try {
+          const key = corruptRowKey(row);
+          if (key) await store.remove(key);
+        } catch {
+          // Keep pruning the rest; hydration quarantines what survives.
+        }
+        continue;
+      }
       const count = kept.get(row.target) ?? 0;
       if (row.at >= cutoff && count < HANDOFF_MAX_STORED) {
         kept.set(row.target, count + 1);
@@ -214,7 +269,9 @@ function hydrate(): Promise<void> {
   if (!hydration) {
     hydration = store
       .list()
-      .then((rows) => {
+      .then(async (rows) => {
+        if (!Array.isArray(rows)) return;
+
         // Keys this run queued itself: every send is written to the store as
         // well as the queue, so a read of the store can return a row for a take
         // that is still waiting in memory. Adding it again would hand the same
@@ -224,13 +281,31 @@ function hydrate(): Promise<void> {
           for (const entry of queue) held.add(entry.key);
         }
 
+        // Validate each row on its own: one corrupt row must neither throw the
+        // rest away nor surface as a take. Bad rows with a key are deleted so
+        // they cannot wedge the next run either; rows without a key can only
+        // be skipped. In-memory takes this run sent are always valid.
+        const valid: HandoffRecord[] = [];
+        const quarantine: string[] = [];
+        for (const row of rows) {
+          if (!isValidHandoffRecord(row)) {
+            const key = corruptRowKey(row);
+            if (key) quarantine.push(key);
+            continue;
+          }
+          valid.push(row);
+        }
+        if (quarantine.length > 0) {
+          await Promise.all(quarantine.map((key) => removeStored(key).catch(() => {})));
+        }
+
                 const cutoff = Date.now() - HANDOFF_MAX_AGE_MS;
         const kept = new Map<HandoffTarget, number>();
         const byTarget = new Map<HandoffTarget, Pending[]>();
 
         // Newest first, so a section's newest takes are the ones that survive
         // the age and count limits; `unshift` puts them back in send order.
-        for (const row of [...rows].reverse()) {
+        for (const row of [...valid].reverse()) {
           if (consumed.has(row.key)) continue;
 
           const count = kept.get(row.target) ?? 0;
@@ -250,7 +325,7 @@ function hydrate(): Promise<void> {
         if (byTarget.size > 0) queuesChanged();
 
         // Stale, over-limit and already-taken rows are not coming back.
-        void pruneStored(rows);
+        void pruneStored(valid);
       })
       .catch(() => {
         // Storage unavailable: the hand-off still works for this session.
@@ -519,7 +594,7 @@ async function claimHydratedHead(
     } catch {
       rows = null;
     }
-    if (rows && !rows.some((row) => row.key === head.key)) {
+    if (rows && !rows.some((row) => row?.key === head.key)) {
       dropStolen(target, head.key);
       return { status: 'stolen' };
     }
@@ -734,7 +809,7 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
         } catch {
           rows = null;
         }
-        if (rows && !rows.some((row) => row.key === key)) {
+        if (rows && !rows.some((row) => row?.key === key)) {
           dropStolen(target, key);
           return true;
         }
@@ -814,7 +889,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
           } catch {
             rows = null;
           }
-          if (rows && !rows.some((row) => row.key === key)) return true;
+          if (rows && !rows.some((row) => row?.key === key)) return true;
         }
 
         const innerLeft = deadline - Date.now();

@@ -29,6 +29,18 @@ const DB_NAME = 'chatter-box-handoff';
 const DB_VERSION = 1;
 const STORE = 'pending';
 
+/**
+ * Entries read back may include values no section wrote. Drop what cannot be
+ * a row at all, and sort tolerantly, so one malformed entry cannot throw the
+ * whole read away and hide every valid take. Finer validation lives with the
+ * queue, which quarantines bad rows by key.
+ */
+export function orderListedRows(rows: HandoffRecord[]): HandoffRecord[] {
+  return rows
+    .filter((row) => !!row && typeof row === 'object')
+    .sort((a, b) => (typeof a.at === 'number' ? a.at : 0) - (typeof b.at === 'number' ? b.at : 0));
+}
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
@@ -67,7 +79,7 @@ export const indexedDbHandoffStore: HandoffStore = {
       const rows = await requestToPromise(
         db.transaction(STORE, 'readonly').objectStore(STORE).getAll() as IDBRequest<HandoffRecord[]>,
       );
-      return rows.sort((a, b) => a.at - b.at);
+      return orderListedRows(rows);
     } catch {
       return [];
     }

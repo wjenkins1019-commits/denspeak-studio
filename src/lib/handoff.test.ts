@@ -26,6 +26,7 @@ import {
   type HandoffTarget,
 } from './handoff';
 import type { HandoffRecord, HandoffStore } from './handoffStore';
+import { orderListedRows } from './handoffStore';
 
 const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
 
@@ -232,7 +233,9 @@ class MemoryStore implements HandoffStore {
 
   async list(): Promise<HandoffRecord[]> {
     this.lists += 1;
-    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+    // Mirrors the real store's contract: entries no section wrote cannot
+    // throw the whole read away.
+    return orderListedRows([...this.rows.values()]);
   }
 
   async put(record: HandoffRecord): Promise<void> {
@@ -532,6 +535,50 @@ describe('durable queue', () => {
       if (previous === undefined) delete holder.locks;
       else holder.locks = previous;
     }
+  });
+
+  it('quarantines corrupt rows without losing the valid takes around them', async () => {
+    // Rows no section wrote must neither wedge hydration nor surface as
+    // takes: each is validated on its own, deleted by key, and skipped.
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+
+    store.rows.set('corrupt-null', null as unknown as HandoffRecord);
+    store.rows.set('corrupt-target', {
+      key: 'corrupt-target',
+      target: 'nowhere',
+      at: Date.now(),
+      item,
+    } as unknown as HandoffRecord);
+    store.rows.set('corrupt-item', {
+      key: 'corrupt-item',
+      target: 'convert',
+      at: Date.now(),
+      item: null,
+    } as unknown as HandoffRecord);
+    store.rows.set('corrupt-blob', {
+      key: 'corrupt-blob',
+      target: 'convert',
+      at: Date.now(),
+      item: { name: 'Bad blob' },
+    } as unknown as HandoffRecord);
+
+    clearHandoff();
+    await hydrateHandoff();
+
+    // The valid take hydrates alone; garbage targets never surface as takes.
+    expect(pendingCounts()).toEqual({ convert: 1 });
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['A take']);
+    expect(await takeHandoff('convert')).toEqual(item);
+
+    // Keyed garbage is quarantined and the taken row went with its take.
+    // The keyless null cannot exist in the real store (its keyPath rejects
+    // keyless puts) and can only be skipped — never wedging hydration.
+    expect([...store.rows.keys()].sort()).toEqual(['corrupt-null']);
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCounts()).toEqual({});
   });
 
   it('deletes the row before handing the take over, so a take is never replayed', async () => {
