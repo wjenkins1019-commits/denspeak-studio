@@ -343,6 +343,17 @@ small {
   outline: none;
 }
 
+.queue-news {
+  margin: 0 0 10px;
+}
+
+/* A line that is not being said takes no room, so a quiet panel and an empty one
+   are spaced the same. Hiding it outright would take it out of the tree that is
+   read, which is the one place such a line has to stay. */
+.queue-news:empty {
+  margin: 0;
+}
+
 .queue-list {
   margin: 0;
   padding: 0;

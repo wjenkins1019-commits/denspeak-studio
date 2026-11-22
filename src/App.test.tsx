@@ -107,6 +107,29 @@ class OnceHungStore implements HandoffStore {
   }
 }
 
+/**
+ * Storage that never answers the first delete it is asked for and refuses the
+ * rest, so a refusal lands while an earlier delete is still waiting.
+ */
+class HangThenRefuseStore implements HandoffStore {
+  readonly rows = new Map<string, HandoffRecord>();
+  hung = false;
+
+  async list(): Promise<HandoffRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: HandoffRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  remove(key: string): Promise<void> {
+    if (this.hung) throw new Error('the row would not delete');
+    this.hung = true;
+    return new Promise(() => {});
+  }
+}
+
 beforeEach(() => {
   clearHandoff();
   // Set the starting route without the event a hash assignment would leave
@@ -566,11 +589,49 @@ describe('hand-off navigation', () => {
     // beside the clear, not in a second region or on the button alone.
     expect(news.textContent).toBe('Discarding “A take”. Clearing 2 takes.');
 
-    // Both settle, and the line goes: a busy announcement outliving its wait
-    // would read as work that never finished.
+    // Both settle into the clear's refusal, said in the one line: no busy text
+    // left to read as work that never finished, and no second region to speak
+    // the refusal over it.
     expect(await screen.findByText(/Couldn’t remove 2 takes/)).toBeTruthy();
-    expect(news.textContent).toBe('');
+    expect(within(panel).getAllByRole('status')).toHaveLength(1);
+    expect(news.textContent).toContain('Couldn’t remove 2 takes');
+    expect(news.textContent).not.toContain('Clearing');
     expect(panel.textContent).toContain('A take');
+  });
+
+  it('says a refusal in the panel’s one line, not over the delete still waiting', async () => {
+    const store = new HangThenRefuseStore();
+    const panel = await openSongQueue(['A take', 'Another take'], store);
+    setClearTimeout(100);
+
+    const news = within(panel).getByRole('status');
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
+    });
+    expect(news.textContent).toBe('Discarding “A take”.');
+
+    // The second row's delete is refused at once while the first is still
+    // waiting, so a refusal and work under way are true together. As two regions
+    // they spoke over each other; as one line the refusal is what is said.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard Another take' }));
+    });
+
+    expect(within(panel).getAllByRole('status')).toHaveLength(1);
+    expect(news.textContent).toBe(
+      'Couldn’t remove “Another take” — its saved copy is still there, so it is still waiting.',
+    );
+    expect(news.textContent).not.toContain('Discarding');
+    // The row left unsaid is not lost: it still says it is working on its own
+    // button, so the reader is not blind to it for the sake of one line.
+    expect(screen.getByRole('button', { name: 'Discarding A take' })).toBeTruthy();
+
+    // The hung delete reaches its deadline rather than outliving the test, and
+    // it is its refusal that then stands.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    expect(news.textContent).toContain('Couldn’t remove “A take”');
   });
 
   it('says a take could not be opened when the store hangs instead of refusing', async () => {

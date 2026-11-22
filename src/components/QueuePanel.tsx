@@ -28,7 +28,7 @@ export function QueuePanel({
 }: {
   label: string;
   takes: QueuedTake[];
-  /** Why a take that should have gone is still listed. */
+  /** Why a take that should have gone is still listed, said in the panel's line. */
   note?: string | null;
   /**
    * A store can take seconds to answer a delete, so the row or the button says
@@ -63,6 +63,11 @@ export function QueuePanel({
   ]
     .filter(Boolean)
     .join('. ');
+  // The one line the panel says out loud, most urgent first: a refusal stands
+  // until the next request clears it, work under way is next, and the empty
+  // result last. One string in one region, so a refusal cannot land on top of
+  // "Clearing 2 takes." and have a reader hear both at once.
+  const news = note ?? (working ? `${working}.` : empty ? 'Nothing queued now.' : '');
 
   useEffect(() => {
     heading.current?.focus();
@@ -135,23 +140,12 @@ export function QueuePanel({
             <h2 id="queue-panel-title" ref={heading} tabIndex={-1}>
               Waiting for {label}
             </h2>
-            {/* What cannot be read off a button: work that is under way while
-                its button's name changes under the focus the press left there,
-                and the empty result once there are no rows to land on. One
-                standing region carries both, present from the first render, so
-                a change is spoken however focus got where it is. The count sits
-                outside it and is still there to be read. */}
             <small className="muted">
-              <span>
-                {empty
-                  ? ''
-                  : takes.length === 1
-                    ? '1 take queued'
-                    : `${takes.length} takes queued`}
-              </span>
-              <span role="status" aria-atomic="true">
-                {working ? `${working}.` : empty ? 'Nothing queued now.' : ''}
-              </span>
+              {empty
+                ? ''
+                : takes.length === 1
+                  ? '1 take queued'
+                  : `${takes.length} takes queued`}
             </small>
           </div>
           <button className="btn ghost small" onClick={onClose}>
@@ -159,11 +153,15 @@ export function QueuePanel({
           </button>
         </div>
 
-        {note && (
-          <p className="muted" role="status">
-            {note}
-          </p>
-        )}
+        {/* The panel's one live region, standing here from the first render so a
+            line that appears in it is read out however focus got where it is. It
+            holds a single line at a time: what a button cannot say, since that
+            button's own name changes under the focus the press left on it, or a
+            refusal, which as its own region would speak over this one. The count
+            above sits outside it and is still there to be read. */}
+        <p className="muted queue-news" role="status" aria-atomic="true">
+          {news}
+        </p>
 
         <ul className="queue-list" ref={list}>
           {takes.map((take, index) => {
