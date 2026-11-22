@@ -343,6 +343,14 @@ small {
   outline: none;
 }
 
+/* A discard moves focus to the next row's button, and a press that moves focus
+   by mouse leaves :focus-visible unmatched, so the row receiving it would show
+   nothing at all. These buttons say where focus is however it got there. */
+.queue-panel button:focus {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
 .queue-news {
   margin: 0 0 10px;
   /* Two or three short sentences: wrapped evenly they break between sentences
