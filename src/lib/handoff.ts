@@ -480,6 +480,22 @@ export function setClearTimeout(ms?: number): void {
   clearTimeoutMs = ms ?? DEFAULT_CLEAR_TIMEOUT_MS;
 }
 
+/**
+ * How long a cross-tab lock may take to grant before the waiter gives up. A
+ * tab holding a take lock while stuck — a delete that never settles inside
+ * the lock — would otherwise hang every other tab's claim or discard on that
+ * take for ever. Long enough for a tab finishing its own delete, short
+ * enough that the panel never sits silent.
+ */
+const DEFAULT_LOCK_TIMEOUT_MS = 2000;
+
+let lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS;
+
+/** Shorten the wait above, so a test does not have to sit through it. */
+export function setLockTimeout(ms?: number): void {
+  lockTimeoutMs = ms ?? DEFAULT_LOCK_TIMEOUT_MS;
+}
+
 /** `work`, or a rejection once `ms` passes without it settling. */
 function withinTimeout(work: Promise<void>, ms: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -516,12 +532,42 @@ function claimLock(): ClaimLock | null {
  * tabs acting on the same stored take serialize: the loser finds the row gone
  * instead of deleting nothing and delivering its stale copy — or delivering
  * a take the other tab just discarded. Without Web Locks the take is handled
- * as before.
+ * as before. The grant itself times out, so a stuck holder cannot hang the
+ * waiter for ever: callers fall back exactly as when the lock will not grant.
+ * A grant arriving after the timeout finds timed-out work that refuses to run.
  */
-function withClaimLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+function withClaimLock<T>(key: string, work: () => Promise<T>, ms: number = lockTimeoutMs): Promise<T> {
   const locks = claimLock();
   if (!locks) return work();
-  return locks.request(`chatter-box-handoff-take-${key}`, work);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error('the take lock would not grant'));
+    }, ms);
+  });
+  const settle = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const granted = locks.request(`chatter-box-handoff-take-${key}`, () => {
+    if (timedOut) return Promise.reject(new Error('the take lock would not grant'));
+    return work();
+  });
+  void granted.then(settle, settle);
+  return Promise.race([granted, timeout]).then(
+    (value) => {
+      settle();
+      return value;
+    },
+    (error: unknown) => {
+      settle();
+      throw error;
+    },
+  );
 }
 
 async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
@@ -871,7 +917,9 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
 
     // Each take is deleted under its own cross-tab lock, like a single
     // discard: a concurrent claim on the same take serializes instead of
-    // racing the delete, and the loser finds the row gone.
+    // racing the delete, and the loser finds the row gone. The wait is capped
+    // by what is left of the clear budget, so one stuck take cannot spend the
+    // whole deadline — let alone hang the panel past it.
     let cleared: boolean;
     try {
       cleared = await withClaimLock(key, async () => {
@@ -900,7 +948,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
           return false;
         }
         return true;
-      });
+      }, Math.min(lockTimeoutMs, left));
     } catch {
       // The lock would not grant: leave the take queued rather than race a
       // claim on its delete, so the panel can say why it is still listed.
