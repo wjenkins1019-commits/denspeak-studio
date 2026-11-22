@@ -1,9 +1,14 @@
 // Contrast guard on the theme tokens: every colour the app paints is chosen in
 // styles.css, so a tweak there is checked here instead of being found later in a
 // screenshot. WCAG AA for normal text is 4.5:1, and that is the bar each pair
-// below holds to — body and quiet labels, accent text, the focus ring, and the
-// text on accent-filled surfaces (the primary button's gradient at both ends,
-// and the rail's count badge, which is filled with --accent).
+// below holds to — body and quiet labels, accent text, the focus ring, the text
+// on accent-filled surfaces (the primary button's gradient at both ends, and the
+// rail's count badge, which is filled with --accent), and the text over the
+// accent washes the page gradient lays across the top of the window.
+//
+// Every theme block in the file is measured, and every token has to be named by
+// a check or declared as painting no text, so a new theme or colour cannot be
+// added without being looked at.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,15 +19,6 @@ const SRC = fileURLToPath(new URL('.', import.meta.url));
 
 type Rgb = [number, number, number];
 type Colour = { rgb: Rgb; alpha: number };
-
-function tokenBlock(selector: string): string {
-  const start = css.indexOf(selector);
-  if (start === -1) throw new Error(`styles.css has no "${selector}" block`);
-  const open = css.indexOf('{', start);
-  const close = css.indexOf('}', open);
-  if (open === -1 || close === -1) throw new Error(`"${selector}" block is not closed`);
-  return css.slice(open + 1, close);
-}
 
 function colour(value: string): Colour {
   const hex = value.match(/^#([0-9a-f]{6})$/i);
@@ -46,10 +42,14 @@ function colour(value: string): Colour {
   throw new Error(`cannot read colour: ${value}`);
 }
 
-function token(block: string, name: string): Colour {
+function tokenText(block: string, name: string): string {
   const match = block.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
   if (!match) throw new Error(`missing ${name}`);
-  return colour(match[1].trim());
+  return match[1].trim();
+}
+
+function token(block: string, name: string): Colour {
+  return colour(tokenText(block, name));
 }
 
 /** `fg` laid over `bg`, so a translucent surface is measured as it is painted. */
@@ -109,10 +109,51 @@ const ACCENT_FILLS = ['--accent-2', '--accent'];
 /** Surfaces the focus ring is drawn against. */
 const RING_SURFACES = ['--bg', '--bg-2'];
 
-const THEMES = [
-  { theme: 'dark', selector: ':root {' },
-  { theme: 'light', selector: ":root[data-theme='light'] {" },
-];
+/** Every theme block in the stylesheet, so a third theme is measured too. */
+const THEMES = [...css.matchAll(/^(:root(?:\[[^\]]*\])?)\s*\{/gm)].map((match) => {
+  const selector = match[1];
+  const open = (match.index ?? 0) + match[0].length - 1;
+  const named = selector.match(/data-theme=['"]([a-z-]+)['"]/);
+
+  return { theme: named ? named[1] : 'default', selector, block: css.slice(open + 1, css.indexOf('}', open)) };
+});
+
+/** Text tokens the app paints straight on the page rather than on a card. */
+const PAGE_TEXT = [...new Set(TEXT_PAIRS.filter(([, bg]) => bg === '--bg' || bg === '--bg-2').map(([fg]) => fg))];
+
+/** The window the page gradient is judged against. */
+const WINDOW = { width: 1280, height: 820 };
+
+/**
+ * The deepest each wash in --bg-image gets inside the window. A radial gradient
+ * fades from its centre, so its stop alpha is only reached off-canvas; the
+ * window's corners, taken at the sizes the gradient declares, are as strong as
+ * it paints where text can sit.
+ */
+function backgroundWashes(block: string): Colour[] {
+  const value = tokenText(block, '--bg-image');
+  const washes: Colour[] = [];
+
+  for (const match of value.matchAll(
+    /radial-gradient\(\s*([\d.]+)px\s+([\d.]+)px\s+at\s+([\d.]+)%\s+(-?[\d.]+)%\s*,\s*(rgba?\([^)]+\))\s*,\s*transparent\s+([\d.]+)%/g,
+  )) {
+    const [, radiusX, radiusY, atX, atY, stop, fade] = match;
+    const wash = colour(stop);
+    const centre = { x: (Number(atX) / 100) * WINDOW.width, y: (Number(atY) / 100) * WINDOW.height };
+    let deepest = 0;
+
+    for (const x of [0, WINDOW.width]) {
+      for (const y of [0, WINDOW.height]) {
+        const from = Math.hypot((x - centre.x) / Number(radiusX), (y - centre.y) / Number(radiusY));
+        deepest = Math.max(deepest, Math.max(0, 1 - from / (Number(fade) / 100)));
+      }
+    }
+
+    if (deepest > 0) washes.push({ rgb: wash.rgb, alpha: wash.alpha * deepest });
+  }
+
+  return washes;
+}
 
 /** Token names a theme block defines. */
 const tokensIn = (block: string) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]);
@@ -152,10 +193,7 @@ const MEASURED = new Set<string>([
  * every token has to be named by a pair above or declared as painting no text.
  */
 describe('token coverage', () => {
-  const defined = new Set([
-    ...tokensIn(tokenBlock(':root {')),
-    ...tokensIn(tokenBlock(":root[data-theme='light'] {")),
-  ]);
+  const defined = new Set(THEMES.flatMap(({ block }) => tokensIn(block)));
 
   it('measures every token, or records why it needs no measurement', () => {
     const unaccounted = [...defined].filter((name) => !MEASURED.has(name) && !NOT_TEXT.has(name));
@@ -744,8 +782,7 @@ describe('what the scans read', () => {
   });
 });
 
-describe.each(THEMES)('$theme theme', ({ selector }) => {
-  const block = tokenBlock(selector);
+describe.each(THEMES)('$theme theme', ({ block }) => {
   const surfaces: Record<string, Colour> = {
     '--bg': token(block, '--bg'),
     '--bg-2': token(block, '--bg-2'),
@@ -784,6 +821,25 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
     for (const surface of RING_SURFACES) {
       const ratio = contrast(token(block, '--accent-2'), token(block, surface));
       expect(ratio, `--accent-2 on ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('keeps text readable where the page gradient is strongest', () => {
+    // The page is not a flat --bg: two accent washes sit over a --bg-2 to --bg
+    // ramp, and text near the top of the window lands in them.
+    const washes = backgroundWashes(block);
+    expect(washes.length, 'the page background has no washes to check').toBeGreaterThan(0);
+
+    for (const fg of PAGE_TEXT) {
+      for (const wash of washes) {
+        for (const base of RING_SURFACES) {
+          const ratio = contrast(token(block, fg), over(wash, token(block, base)));
+          expect(
+            ratio,
+            `${fg} on ${base} under rgb(${wash.rgb.join(',')}) at ${wash.alpha.toFixed(3)} is ${ratio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     }
   });
 });

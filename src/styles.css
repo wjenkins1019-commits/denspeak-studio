@@ -46,17 +46,18 @@
   --bg: #f5f8fd;
   --bg-2: #e6edf9;
   --accent: #1a6fd4;
-  /* Text-grade teal: 5.0:1 on the page and 4.6:1 on the panel, so the accent
-     labels clear AA even inside the queue panel and its focus ring keeps a
-     strong 4.6:1 against the surface it is drawn on. */
-  --accent-2: #0b7396;
-  --warm: #9a5a00;
+  /* Text-grade teal: clears AA on the page and on the panel, including where
+     the page gradient's accent wash is strongest behind the labels nearest it,
+     and keeps a strong 4.6:1 for the focus ring. */
+  --accent-2: #0a6b8c;
+  --warm: #925500;
   --danger: #b3223c;
   --text: #0c1a2c;
   --muted: #41536b;
   /* Dark enough to clear 4.5:1 on every light surface the app paints text on:
-     the page, the cards and the teal hint boxes. */
-  --dim: #56677d;
+     the page, the cards, the teal hint boxes, and the page gradient's washes
+     where they are deepest at the top of the window. */
+  --dim: #54657b;
   --line: rgba(12, 40, 78, 0.14);
   --line-soft: rgba(12, 40, 78, 0.09);
   --line-strong: rgba(12, 40, 78, 0.26);
