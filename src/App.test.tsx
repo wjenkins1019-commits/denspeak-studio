@@ -352,6 +352,93 @@ describe('hand-off navigation', () => {
     expect(emptyNews.textContent).toBe('Nothing queued now.');
   });
 
+  it('returns focus to the count that opened it when Escape closes the panel', async () => {
+    await openSongQueue(['First take', 'Second take']);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { level: 2, name: 'Waiting for Song' }),
+      ),
+    );
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Waiting for Song' })).toBeNull();
+    // Back where the reader was, so the next press reopens the same queue.
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /2 takes waiting for Song/ }),
+    );
+  });
+
+  it('returns focus to the count when its Close button is pressed', async () => {
+    await openSongQueue(['First take', 'Second take']);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { level: 2, name: 'Waiting for Song' }),
+      ),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Waiting for Song' })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /2 takes waiting for Song/ }),
+    );
+  });
+
+  it('returns focus to the count when the scrim is pressed', async () => {
+    await openSongQueue(['First take', 'Second take']);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('heading', { level: 2, name: 'Waiting for Song' }),
+      ),
+    );
+
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Waiting for Song' }).parentElement!);
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Waiting for Song' })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: /2 takes waiting for Song/ }),
+    );
+  });
+
+  it('falls back to the section rail entry when the count that opened it is gone', async () => {
+    await openSongQueue(['A take']);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear all 1' }));
+    });
+
+    // The queue went with it, so there is no count to go back to.
+    expect(screen.queryByRole('button', { name: /waiting for Song/ })).toBeNull();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Waiting for Song' })).toBeNull();
+    // The section itself, rather than the page behind the dialog.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Song/ }));
+  });
+
+  it('lands focus on the section heading when the panel opens its section', async () => {
+    await openSongQueue(['A take']);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open Song' }));
+    });
+
+    // The count goes away with the navigation, so the arrival takes focus to
+    // the section it swapped in, in an effect: waited for, not read with it.
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Rap over your beat' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+  });
+
   it('leaves the on-screen section’s count to its notice and keeps the others', async () => {
     render(
       <StrictMode>
