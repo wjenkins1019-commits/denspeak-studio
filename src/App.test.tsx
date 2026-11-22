@@ -80,6 +80,30 @@ class HungStore implements HandoffStore {
   }
 }
 
+/** Storage that hangs the first delete it is asked for, then answers. */
+class OnceHungStore implements HandoffStore {
+  readonly rows = new Map<string, HandoffRecord>();
+  hung = false;
+
+  async list(): Promise<HandoffRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: HandoffRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  remove(key: string): Promise<void> {
+    if (!this.hung) {
+      this.hung = true;
+      return new Promise(() => {});
+    }
+
+    this.rows.delete(key);
+    return Promise.resolve();
+  }
+}
+
 beforeEach(() => {
   clearHandoff();
   // Set the starting route without the event a hash assignment would leave
@@ -435,6 +459,27 @@ describe('hand-off navigation', () => {
     expect(document.activeElement).toBe(heading);
   });
 
+  it('says a take is still queued when the store hangs on a discard', async () => {
+    const store = new HungStore();
+    const panel = await openSongQueue(['A take', 'Another take'], store);
+    // The real wait is seconds long; what matters here is that it ends.
+    setClearTimeout(20);
+
+    const discard = screen.getByRole('button', { name: 'Discard A take' });
+    discard.focus();
+    await act(async () => {
+      fireEvent.click(discard);
+    });
+
+    // The row would not clear, so it is still listed and the panel says why
+    // instead of sitting on a Discard button that appeared to do nothing.
+    expect(await screen.findByText(/its saved copy is still there/)).toBeTruthy();
+    expect(panel.textContent).toContain('A take');
+    expect(panel.textContent).toContain('Another take');
+    expect(store.rows.size).toBe(2);
+    expect(document.activeElement).toBe(discard);
+  });
+
   it('says a take could not be opened when the store hangs instead of refusing', async () => {
     const store = new HungStore();
     setHandoffStore(store);
@@ -460,6 +505,38 @@ describe('hand-off navigation', () => {
     expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
     expect(screen.queryByText(/Arrived from another section/)).toBeNull();
     expect(store.rows.size).toBe(1);
+  });
+
+  it('opens the take on a retry once a hanging store answers', async () => {
+    const store = new OnceHungStore();
+    setHandoffStore(store);
+    setClearTimeout(20);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Song/ }));
+    });
+
+    // The first delete hangs, so the take stays queued and the section says so;
+    // it has to still be claimable once the store starts answering.
+    expect(await screen.findByText(/wouldn’t clear, so it is still waiting/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    });
+
+    expect(await screen.findByText(/Arrived from another section: A take/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(store.rows.size).toBe(0);
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {

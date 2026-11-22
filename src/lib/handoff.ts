@@ -504,7 +504,9 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
   if (!queue?.some((entry) => entry.key === key)) return false;
 
   try {
-    await store.remove(key);
+    // A delete that never answers counts as one that refused: the row is still
+    // there, so the take stays queued and the panel says why it is still listed.
+    await withinTimeout(store.remove(key), clearTimeoutMs);
   } catch {
     return false;
   }
@@ -539,7 +541,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
 
   for (const key of asked) {
     try {
-      await store.remove(key);
+      await withinTimeout(store.remove(key), clearTimeoutMs);
       consumed.add(key);
       gone += 1;
     } catch {
