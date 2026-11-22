@@ -140,7 +140,7 @@ export function QueuePanel({
             <h2 id="queue-panel-title" ref={heading} tabIndex={-1}>
               Waiting for {label}
             </h2>
-            <small className="muted">
+            <small>
               {empty
                 ? ''
                 : takes.length === 1

@@ -351,6 +351,12 @@ small {
   outline-offset: 2px;
 }
 
+/* The count of what is queued, at the same weight as the line under it rather
+   than the dim grey that made it 3.6:1 on the light panel. */
+.queue-head small {
+  color: var(--muted);
+}
+
 .queue-news {
   margin: 0 0 10px;
   /* The dim grey left a refusal at 3.6:1 on the light panel, the faintest text
@@ -404,7 +410,9 @@ small {
 
 .queue-take small {
   display: block;
-  color: var(--dim);
+  /* 11px in the dim grey was 3.6:1 on the light panel: the smallest text there,
+     and the faintest. */
+  color: var(--muted);
   font-size: 11px;
 }
 
