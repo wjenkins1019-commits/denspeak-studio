@@ -35,6 +35,7 @@ export function QueuePanel({
   // it was then, so focus only moves if the list actually changed.
   const removal = useRef<{ index: number; keys: string } | null>(null);
   const keys = takes.map((take) => take.key).join('|');
+  const empty = takes.length === 0;
 
   useEffect(() => {
     heading.current?.focus();
@@ -103,12 +104,23 @@ export function QueuePanel({
             <h2 id="queue-panel-title" ref={heading} tabIndex={-1}>
               Waiting for {label}
             </h2>
+            {/* What a discard or a clear can leave unsaid: once no rows are left
+                there is no button to land on and no row name to read. The
+                region stands here from the first render and only the empty
+                result fills it, so the count is not read out after every
+                discard on top of the row that just took the focus. The count
+                sits outside the region and is still there to be read. */}
             <small className="muted">
-              {takes.length === 0
-                ? 'Nothing queued now.'
-                : takes.length === 1
-                  ? '1 take queued'
-                  : `${takes.length} takes queued`}
+              <span>
+                {empty
+                  ? ''
+                  : takes.length === 1
+                    ? '1 take queued'
+                    : `${takes.length} takes queued`}
+              </span>
+              <span role="status" aria-atomic="true">
+                {empty ? 'Nothing queued now.' : ''}
+              </span>
             </small>
           </div>
           <button className="btn ghost small" onClick={onClose}>

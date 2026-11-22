@@ -5,7 +5,7 @@
 // hash and history depth; this one shows the section on screen changing.
 // Rendered under StrictMode, as the app is.
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { clearHandoff, sendHandoff, sendTake, setHandoffStore } from './lib/handoff';
@@ -244,6 +244,12 @@ describe('hand-off navigation', () => {
     const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
     expect(document.activeElement).toBe(heading);
 
+    // The empty result has its own standing live region, silent while takes are
+    // still listed.
+    const dialog = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    const emptyNews = within(dialog).getByRole('status');
+    expect(emptyNews.textContent).toBe('');
+
     // The row the click lands on is gone with the click, so a pointer has
     // already put focus on that button's way out.
     const first = screen.getByRole('button', { name: 'Discard First take' });
@@ -256,6 +262,9 @@ describe('hand-off navigation', () => {
     // it is on the take that took the discarded row's place.
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard Second take' }));
     expect(document.activeElement).not.toBe(document.body);
+    // The row that took the focus already says what is left; the count is not
+    // also read out over it.
+    expect(emptyNews.textContent).toBe('');
 
     const clear = screen.getByRole('button', { name: 'Clear all 1' });
     clear.focus();
@@ -264,9 +273,10 @@ describe('hand-off navigation', () => {
     });
 
     // Nothing left to land on: the heading is where the panel opened, and the
-    // line under it says the queue is empty.
+    // empty result fills the live region, so it is spoken as well as shown.
     expect(screen.getByText('Nothing queued now.')).toBeTruthy();
     expect(document.activeElement).toBe(heading);
+    expect(emptyNews.textContent).toBe('Nothing queued now.');
   });
 
   it('leaves the on-screen section’s count to its notice and keeps the others', async () => {
