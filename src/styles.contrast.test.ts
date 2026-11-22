@@ -129,14 +129,18 @@ const ACCENT_FILLS = ['--accent-2', '--accent'];
 /** Surfaces the focus ring is drawn against. */
 const RING_SURFACES = ['--bg', '--bg-2'];
 
-/** Every theme block in the stylesheet, so a third theme is measured too. */
-const THEMES = [...css.matchAll(/^(:root(?:\[[^\]]*\])?)\s*\{/gm)].map((match) => {
-  const selector = match[1];
-  const open = (match.index ?? 0) + match[0].length - 1;
-  const named = selector.match(/data-theme=['"]([a-z-]+)['"]/);
+/** Every theme block in a stylesheet, so a third theme is measured too. */
+function themesIn(source: string) {
+  return [...source.matchAll(/^(:root(?:\[[^\]]*\])?)\s*\{/gm)].map((match) => {
+    const selector = match[1];
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const named = selector.match(/data-theme=['"]([a-z-]+)['"]/);
 
-  return { theme: named ? named[1] : 'default', selector, block: css.slice(open + 1, css.indexOf('}', open)) };
-});
+    return { theme: named ? named[1] : 'default', selector, block: source.slice(open + 1, source.indexOf('}', open)) };
+  });
+}
+
+const THEMES = themesIn(css);
 
 /** Text tokens the app paints straight on the page rather than on a card. */
 const PAGE_TEXT = [...new Set(TEXT_PAIRS.filter(([, bg]) => bg === '--bg' || bg === '--bg-2').map(([fg]) => fg))];
@@ -820,8 +824,9 @@ describe('what the scans read', () => {
   });
 });
 
-describe.each(THEMES)('$theme theme', ({ block }) => {
-  const surfaces: Record<string, Colour> = {
+/** The surfaces the pairs are measured on, each translucent one composited. */
+function surfacesOf(block: string): Record<string, Colour> {
+  return {
     '--bg': token(block, '--bg'),
     '--bg-2': token(block, '--bg-2'),
     // Translucent surfaces are measured where they are painted: on a card for
@@ -836,6 +841,10 @@ describe.each(THEMES)('$theme theme', ({ block }) => {
     '--active-soft': over(token(block, '--active-soft'), token(block, '--bg')),
     '--active-strong': over(token(block, '--active-strong'), token(block, '--bg')),
   };
+}
+
+describe.each(THEMES)('$theme theme', ({ block }) => {
+  const surfaces = surfacesOf(block);
 
   it.each(TEXT_PAIRS)('keeps %s readable on %s', (fgToken, bgToken) => {
     const ratio = contrast(token(block, fgToken), surfaces[bgToken]);
@@ -917,5 +926,103 @@ describe.each(THEMES)('$theme theme', ({ block }) => {
         }
       }
     }
+  });
+});
+
+/** Every token the text gates measure as the painted colour. */
+const TEXT_TOKENS = [...new Set([...TEXT_PAIRS.map(([fg]) => fg), '--primary-text'])];
+
+/** The surface each text token is first measured against, which it can be set to. */
+const TEXT_SURFACE = new Map<string, string>();
+for (const [fg, bg] of TEXT_PAIRS) if (!TEXT_SURFACE.has(fg)) TEXT_SURFACE.set(fg, bg);
+TEXT_SURFACE.set('--primary-text', '--accent');
+
+/** The text gates of one theme, as the failures the tests above would report. */
+function textFailures(block: string): string[] {
+  const surfaces = surfacesOf(block);
+  const failed: string[] = [];
+  const note = (fg: string, on: string, ratio: number) => {
+    if (ratio < 4.5) failed.push(`${fg} on ${on} is ${ratio.toFixed(2)}:1`);
+  };
+
+  for (const [fg, bg] of TEXT_PAIRS) note(fg, bg, contrast(token(block, fg), surfaces[bg]));
+  for (const fill of ACCENT_FILLS) {
+    note('--primary-text', fill, contrast(token(block, '--primary-text'), token(block, fill)));
+  }
+
+  return failed;
+}
+
+/**
+ * A stylesheet with one token set, in every theme, to the colour it is measured
+ * against — the one value no threshold in here can pass. It is a string, not a
+ * file: the guard's own readers are pointed at the weakened copy.
+ */
+function weakened(source: string, name: string, against: string): string {
+  const themes = themesIn(source);
+  let out = source;
+  let rewritten = 0;
+
+  for (const { block } of themes) {
+    const replacement = tokenText(block, against);
+    // A declaration only: `var(--text)` and `--text-2:` do not match.
+    const next = block.replace(
+      new RegExp(`(${name}\\s*:\\s*)[^;]+;`, 'g'),
+      (_declaration, head: string) => `${head}${replacement};`,
+    );
+    if (next === block) continue;
+
+    rewritten += 1;
+    out = out.replace(block, () => next);
+  }
+
+  if (rewritten !== themes.length) {
+    throw new Error(`${name} was rewritten in ${rewritten} of ${themes.length} theme blocks`);
+  }
+
+  return out;
+}
+
+/**
+ * A green run only means something while the guard still reads the stylesheet.
+ * Each text token is weakened in memory, one at a time, to the colour behind it
+ * and a failure is required, so a scan that stops matching, a token the reader
+ * quietly stops finding, or a threshold that drifts fails here instead of
+ * leaving checks that run zero times and pass.
+ */
+describe('what the guard catches', () => {
+  it('finds the theme blocks the checks are built from', () => {
+    // `describe.each` over an empty list passes silently, which is exactly the
+    // failure the rest of this block exists to make loud.
+    expect(THEMES.length, 'no theme block parsed, so every colour check ran zero times').toBeGreaterThan(0);
+    expect(themesIn(css).map(({ theme }) => theme)).toEqual(THEMES.map(({ theme }) => theme));
+  });
+
+  it('reports nothing for the stylesheet as it stands', () => {
+    // Ties the weakened runs to the real gates: if this mirror drifts from the
+    // tests above, the file itself starts failing here.
+    const failures = THEMES.flatMap(({ theme, block }) =>
+      textFailures(block).map((failure) => `${theme}: ${failure}`),
+    );
+    expect(failures).toEqual([]);
+  });
+
+  it.each(TEXT_TOKENS)('fails when %s is weakened to the colour behind it', (name) => {
+    const against = TEXT_SURFACE.get(name);
+    expect(against, `${name} is measured on no surface`).toBeDefined();
+
+    const source = weakened(css, name, against as string);
+    expect(source, `${name} was not rewritten, so nothing was weakened`).not.toBe(css);
+
+    const themes = themesIn(source);
+    expect(themes.length, 'the weakened copy no longer parses into theme blocks').toBe(THEMES.length);
+
+    const failures = themes.flatMap(({ theme, block }) =>
+      textFailures(block).map((failure) => `${theme}: ${failure}`),
+    );
+    expect(failures, `${name} was weakened and no check failed`).not.toEqual([]);
+    // The failure has to be about the token that was weakened, not some other
+    // colour that happened to break with it.
+    expect(failures.join(' '), `no failure names ${name}`).toContain(name);
   });
 });
