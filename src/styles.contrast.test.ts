@@ -1074,6 +1074,18 @@ describe('what the scans read', () => {
       expect(() => graphLayers(sheet(painted), 'default', block), painted).toThrow(/no shape/);
     }
   });
+
+  it('warns while green when a pair slides under the comfortable threshold', () => {
+    const block = THEMES.find(({ theme }) => theme === 'light')?.block ?? '';
+    const [warning] = marginWarnings('light', block, [{ label: '--dim on --bg', ratio: 4.8 }]);
+    // The token and its headroom, annotated on the token's line in styles.css.
+    expect(warning).toMatch(/^::warning file=src\/styles\.css,line=\d+::light: --dim has \+0\.30 headroom above 4\.5:1/);
+    expect(tokenLine('--dim', block)).toBeGreaterThan(1);
+    // Comfortable pairs stay quiet, and so do pairs the margin already fails.
+    expect(marginWarnings('light', block, [{ label: '--dim on --bg', ratio: 5.2 }])).toEqual([]);
+    expect(marginWarnings('light', block, [{ label: '--dim on --bg', ratio: 4.6 }])).toEqual([]);
+    expect(escapeWorkflow('a%b\nc')).toBe('a%25b%0Ac');
+  });
 });
 
 /** The surfaces the pairs are measured on, each translucent one composited. */
@@ -1358,17 +1370,64 @@ describe('what the guard catches', () => {
  * hundredth is a colour nobody can see going wrong: the next small tweak takes
  * it under and the first sign is a red run. This keeps a margin, and prints the
  * tightest pairs, so a slide is readable in the log while it is still a slide.
+ *
+ * The log is invisible in a green CI run, so pairs under a comfortable
+ * threshold also emit GitHub workflow warnings: the token and its headroom
+ * show on the pull request while the pair still passes.
  */
 const MARGIN = 0.2;
 
+/** Headroom under which a passing pair is worth a warning while still green. */
+const WARN_MARGIN = 0.5;
+
+/** Escape a workflow command's message the way GitHub reads it. */
+function escapeWorkflow(value: string): string {
+  return value.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+}
+
+/** The line of styles.css where a theme block defines a token. */
+function tokenLine(name: string, block: string): number {
+  const at = css.indexOf(block);
+  const inner = block.search(new RegExp(`${name}\\s*:`));
+  if (at === -1 || inner === -1) return 1;
+  return css.slice(0, at + inner).split('\n').length;
+}
+
+/**
+ * Workflow warnings for gates under the comfortable threshold. The first word
+ * of a gate label is the text token it measures, which is where the annotation
+ * points; the message names that token and its headroom above the 4.5:1 floor.
+ * Pairs the margin already fails are left out: the red run names them.
+ */
+function marginWarnings(
+  theme: string,
+  block: string,
+  gates: Array<{ label: string; ratio: number }>,
+): string[] {
+  return gates
+    .filter(({ ratio }) => ratio >= 4.5 + MARGIN && ratio < 4.5 + WARN_MARGIN)
+    .map(({ label, ratio }) => {
+      const token = label.split(' ')[0];
+      return `::warning file=src/styles.css,line=${tokenLine(token, block)}::${escapeWorkflow(`${theme}: ${token} has +${(ratio - 4.5).toFixed(2)} headroom above 4.5:1 (${label} ${ratio.toFixed(2)}:1)`)}`;
+    });
+}
+
 describe.each(THEMES)('$theme theme margin', ({ theme, block }) => {
   it('clears the AA floor by a visible margin', () => {
-    const tightest = textGates(block, theme)
+    const gates = textGates(block, theme);
+    const tightest = [...gates]
       .sort((a, b) => a.ratio - b.ratio)
       .slice(0, 3)
       .map(({ label, ratio }) => `${label} ${ratio.toFixed(2)}:1 (+${(ratio - 4.5).toFixed(2)})`);
 
     console.info(`${theme}: tightest text pairs — ${tightest.join('; ')}`);
+
+    // A green run hides the log, so a slide shows on the pull request instead.
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      for (const warning of marginWarnings(theme, block, gates)) {
+        process.stdout.write(`${warning}\n`);
+      }
+    }
 
     expect(textFailures(block, theme, 4.5 + MARGIN)).toEqual([]);
   });
