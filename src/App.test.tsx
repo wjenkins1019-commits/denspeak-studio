@@ -5,7 +5,7 @@
 // hash and history depth; this one shows the section on screen changing.
 // Rendered under StrictMode, as the app is.
 import { StrictMode } from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { clearHandoff, sendHandoff, sendTake, setClearTimeout, setHandoffStore } from './lib/handoff';
@@ -307,7 +307,10 @@ describe('hand-off navigation', () => {
     const panel = await openSongQueue(['First take', 'Second take']);
 
     const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
-    expect(document.activeElement).toBe(heading);
+    // The panel takes focus in an effect, which can land after the dialog is
+    // already in the DOM: wait for the focus rather than reading it in the
+    // same tick as the panel.
+    await waitFor(() => expect(document.activeElement).toBe(heading));
 
     // The empty result has its own standing live region, silent while takes are
     // still listed.
@@ -323,9 +326,13 @@ describe('hand-off navigation', () => {
     });
 
     // Focus follows the list rather than dropping to the page behind the dialog:
-    // it is on the take that took the discarded row's place.
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard Second take' }));
-    expect(document.activeElement).not.toBe(document.body);
+    // it is on the take that took the discarded row's place. The move is made
+    // in an effect after the row leaves, so it is waited for rather than read
+    // in the same tick as the click.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard Second take' }));
+      expect(document.activeElement).not.toBe(document.body);
+    });
     // The row that took the focus already says what is left; the count is not
     // also read out over it.
     expect(emptyNews.textContent).toBe('');
@@ -338,8 +345,10 @@ describe('hand-off navigation', () => {
 
     // Nothing left to land on: the heading is where the panel opened, and the
     // empty result fills the live region, so it is spoken as well as shown.
+    // The move is made in an effect after the last row leaves, so it is waited
+    // for rather than read in the same tick as the text.
     expect(screen.getByText('Nothing queued now.')).toBeTruthy();
-    expect(document.activeElement).toBe(heading);
+    await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(emptyNews.textContent).toBe('Nothing queued now.');
   });
 
