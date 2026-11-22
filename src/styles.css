@@ -8,9 +8,10 @@
   --text: #eaf3ff;
   --muted: #a7bdd9;
   /* Light enough to clear 4.5:1 on the rail, where the page gradient's wash
-     shows through the rail's own translucent white, at the deepest the wash
-     gets when the window is at its smallest. */
-  --dim: #8ba4c2;
+     shows through the rail's own translucent white at the deepest it gets when
+     the window is at its smallest, and to leave room above it so a small tweak
+     shows up before it fails. */
+  --dim: #90a8c4;
   --line: rgba(148, 197, 255, 0.16);
   --line-soft: rgba(148, 197, 255, 0.1);
   --line-strong: rgba(148, 197, 255, 0.3);
@@ -53,18 +54,18 @@
      the page gradient's accent wash is strongest behind the labels nearest it,
      on the rail's active item where its own tint sits under the label, and it
      keeps a strong 4.6:1 for the focus ring. */
-  --accent-2: #0a698a;
+  --accent-2: #0a6585;
   /* Amber, dark enough to sit on the page gradient's deepest wash at the
-     smallest window the app allows. */
-  --warm: #8f5300;
+     smallest window the app allows, with room above the floor. */
+  --warm: #8c5100;
   --danger: #b3223c;
   --text: #0c1a2c;
   --muted: #41536b;
   /* Dark enough to clear 4.5:1 on every light surface the app paints text on:
      the page, the cards, the teal hint boxes, and the page gradient's washes
-     where they are deepest at the top of the window when it is at its
-     smallest. */
-  --dim: #536379;
+     where they are deepest at the top of the window when it is at its smallest
+     — with room above the floor so a small tweak shows up before it fails. */
+  --dim: #516075;
   --line: rgba(12, 40, 78, 0.14);
   --line-soft: rgba(12, 40, 78, 0.09);
   --line-strong: rgba(12, 40, 78, 0.26);

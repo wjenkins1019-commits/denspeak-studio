@@ -983,20 +983,60 @@ const TEXT_SURFACE = new Map<string, string>();
 for (const [fg, bg] of TEXT_PAIRS) if (!TEXT_SURFACE.has(fg)) TEXT_SURFACE.set(fg, bg);
 TEXT_SURFACE.set('--primary-text', '--accent');
 
-/** The text gates of one theme, as the failures the tests above would report. */
-function textFailures(block: string): string[] {
+/** Every text gate of one theme, with the ratio it measured. */
+function textGates(block: string): Array<{ label: string; ratio: number }> {
   const surfaces = surfacesOf(block);
-  const failed: string[] = [];
-  const note = (fg: string, on: string, ratio: number) => {
-    if (ratio < 4.5) failed.push(`${fg} on ${on} is ${ratio.toFixed(2)}:1`);
-  };
+  const rows: Array<{ label: string; ratio: number }> = [];
+  const gate = (label: string, ratio: number) => rows.push({ label, ratio });
 
-  for (const [fg, bg] of TEXT_PAIRS) note(fg, bg, contrast(token(block, fg), surfaces[bg]));
+  for (const [fg, bg] of TEXT_PAIRS) gate(`${fg} on ${bg}`, contrast(token(block, fg), surfaces[bg]));
   for (const fill of ACCENT_FILLS) {
-    note('--primary-text', fill, contrast(token(block, '--primary-text'), token(block, fill)));
+    gate(`--primary-text on ${fill}`, contrast(token(block, '--primary-text'), token(block, fill)));
   }
 
-  return failed;
+  // The same page and rail surfaces the tests above paint text on.
+  const washes = backgroundWashes(block);
+  const pages = [
+    ...RING_SURFACES.map((surface) => token(block, surface)),
+    ...RING_SURFACES.flatMap((surface) => washes.map((wash) => over(wash, token(block, surface)))),
+  ];
+
+  for (const fg of PAGE_TEXT) {
+    for (const wash of washes) {
+      for (const base of RING_SURFACES) {
+        gate(
+          `${fg} on ${base} under a ${wash.alpha.toFixed(3)} wash`,
+          contrast(token(block, fg), over(wash, token(block, base))),
+        );
+      }
+    }
+  }
+
+  const railStops = gradientStops(block, '--rail-bg');
+  const nav = gradientStops(block, '--active-nav');
+  const onRail = railStops.map((rail) => [rail]);
+  const onActive = [...onRail, ...railStops.flatMap((rail) => nav.map((tint) => [rail, tint]))];
+
+  for (const [fg, onActiveTint] of RAIL_TEXT) {
+    for (const stack of onActiveTint ? onActive : onRail) {
+      for (const page of pages) {
+        const surface = stack.reduce((under, layer) => over(layer, under), page);
+        gate(
+          `${fg} on the rail at ${stack.map((layer) => layer.alpha.toFixed(3)).join(' over ')}`,
+          contrast(token(block, fg), surface),
+        );
+      }
+    }
+  }
+
+  return rows;
+}
+
+/** The text gates that fall below `bar`, as the failures the tests would report. */
+function textFailures(block: string, bar = 4.5): string[] {
+  return textGates(block)
+    .filter(({ ratio }) => ratio < bar)
+    .map(({ label, ratio }) => `${label} is ${ratio.toFixed(2)}:1`);
 }
 
 /**
@@ -1070,5 +1110,26 @@ describe('what the guard catches', () => {
     // The failure has to be about the token that was weakened, not some other
     // colour that happened to break with it.
     expect(failures.join(' '), `no failure names ${name}`).toContain(name);
+  });
+});
+
+/**
+ * How far above the AA floor a pair has to sit. A colour that clears 4.5:1 by a
+ * hundredth is a colour nobody can see going wrong: the next small tweak takes
+ * it under and the first sign is a red run. This keeps a margin, and prints the
+ * tightest pairs, so a slide is readable in the log while it is still a slide.
+ */
+const MARGIN = 0.2;
+
+describe.each(THEMES)('$theme theme margin', ({ theme, block }) => {
+  it('clears the AA floor by a visible margin', () => {
+    const tightest = textGates(block)
+      .sort((a, b) => a.ratio - b.ratio)
+      .slice(0, 3)
+      .map(({ label, ratio }) => `${label} ${ratio.toFixed(2)}:1 (+${(ratio - 4.5).toFixed(2)})`);
+
+    console.info(`${theme}: tightest text pairs — ${tightest.join('; ')}`);
+
+    expect(textFailures(block, 4.5 + MARGIN)).toEqual([]);
   });
 });
