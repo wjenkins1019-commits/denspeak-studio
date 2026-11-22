@@ -520,6 +520,31 @@ describe('hand-off navigation', () => {
     expect(store.rows.size).toBe(0);
   });
 
+  it('spends a successful removal: a late take leaves focus where the reader put it', async () => {
+    const panel = await openSongQueue(['First take', 'Second take']);
+
+    const first = screen.getByRole('button', { name: 'Discard First take' });
+    first.focus();
+    await act(async () => {
+      fireEvent.click(first);
+    });
+    // The follow-focus lands on the row that took its place...
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard Second take' })),
+    );
+
+    // ...and the request is spent, not banked: the reader moves off, a take
+    // arrives, and focus is not pulled back to the row.
+    const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
+    heading.focus();
+    await act(async () => {
+      sendHandoff('song', { name: 'Late take', blob: new Blob(['c']), duration: 3 });
+    });
+
+    expect(panel.textContent).toContain('Late take');
+    expect(document.activeElement).toBe(heading);
+  });
+
   it('keeps a take the panel could not delete, and leaves focus where the reader has it', async () => {
     const store = new StubbornStore();
     const panel = await openSongQueue(['A take', 'Another take'], store);
