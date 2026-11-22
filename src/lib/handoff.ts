@@ -437,10 +437,11 @@ function claimLock(): ClaimLock | null {
 }
 
 /**
- * Hold the cross-tab lock for `key` while claiming it, so two tabs taking the
- * same stored take serialize: the loser finds the row gone instead of
- * deleting nothing and delivering its stale copy. Without Web Locks the take
- * is claimed as before.
+ * Hold the cross-tab lock for `key` while claiming or discarding it, so two
+ * tabs acting on the same stored take serialize: the loser finds the row gone
+ * instead of deleting nothing and delivering its stale copy — or delivering
+ * a take the other tab just discarded. Without Web Locks the take is handled
+ * as before.
  */
 function withClaimLock<T>(key: string, work: () => Promise<T>): Promise<T> {
   const locks = claimLock();
@@ -712,25 +713,56 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
   const queue = pending.get(target);
   if (!queue?.some((entry) => entry.key === key)) return false;
 
+  // Serialize with claims on the same take: a claim that verified the row
+  // first must finish its delete before this discard deletes underneath it
+  // (or vice versa), or the claim delivers a take the user just discarded.
+  // A lock that will not grant leaves the take queued rather than race a
+  // claim on its delete, so the panel can say why it is still listed.
   try {
-    // A delete that never answers counts as one that refused: the row is still
-    // there, so the take stays queued and the panel says why it is still listed.
-    await withinTimeout(removeStored(key), clearTimeoutMs);
+    return await withClaimLock(key, async () => {
+      const entry = pending.get(target)?.find((candidate) => candidate.key === key);
+      // Claimed or discarded while the lock was waited for: nothing left.
+      if (!entry) return false;
+
+      // A stored take whose row is already gone was claimed or discarded by
+      // another tab, or pruned: drop this tab's stale copy. The take is gone
+      // either way, so the discard still counts — nothing here could deliver it.
+      if (entry.stored) {
+        let rows: HandoffRecord[] | null = null;
+        try {
+          rows = await store.list();
+        } catch {
+          rows = null;
+        }
+        if (rows && !rows.some((row) => row.key === key)) {
+          dropStolen(target, key);
+          return true;
+        }
+      }
+
+      try {
+        // A delete that never answers counts as one that refused: the row is still
+        // there, so the take stays queued and the panel says why it is still listed.
+        await withinTimeout(removeStored(key), clearTimeoutMs);
+      } catch {
+        return false;
+      }
+
+      // The delete took a moment; the take may have been claimed while it ran, in
+      // which case there is nothing left to take out of the queue.
+      const current = pending.get(target);
+      const index = current ? current.findIndex((entry) => entry.key === key) : -1;
+      consumed.add(key);
+      if (current && index >= 0) {
+        current.splice(index, 1);
+        if (current.length === 0) pending.delete(target);
+      }
+      queuesChanged();
+      return true;
+    });
   } catch {
     return false;
   }
-
-  // The delete took a moment; the take may have been claimed while it ran, in
-  // which case there is nothing left to take out of the queue.
-  const current = pending.get(target);
-  const index = current ? current.findIndex((entry) => entry.key === key) : -1;
-  consumed.add(key);
-  if (current && index >= 0) {
-    current.splice(index, 1);
-    if (current.length === 0) pending.delete(target);
-  }
-  queuesChanged();
-  return true;
 }
 
 /**
@@ -762,11 +794,48 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
       continue;
     }
 
+    // Each take is deleted under its own cross-tab lock, like a single
+    // discard: a concurrent claim on the same take serializes instead of
+    // racing the delete, and the loser finds the row gone.
+    let cleared: boolean;
     try {
-      await withinTimeout(removeStored(key), left);
+      cleared = await withClaimLock(key, async () => {
+        const entry = pending.get(target)?.find((candidate) => candidate.key === key);
+        // Taken or discarded while the lock was waited for: nothing left.
+        if (!entry) return true;
+
+        // A stored take whose row is already gone was claimed or discarded
+        // by another tab, or pruned: nothing to delete, and the sweep below
+        // drops this tab's stale copy.
+        if (entry.stored) {
+          let rows: HandoffRecord[] | null = null;
+          try {
+            rows = await store.list();
+          } catch {
+            rows = null;
+          }
+          if (rows && !rows.some((row) => row.key === key)) return true;
+        }
+
+        const innerLeft = deadline - Date.now();
+        if (innerLeft <= 0) return false;
+        try {
+          await withinTimeout(removeStored(key), innerLeft);
+        } catch {
+          return false;
+        }
+        return true;
+      });
+    } catch {
+      // The lock would not grant: leave the take queued rather than race a
+      // claim on its delete, so the panel can say why it is still listed.
+      cleared = false;
+    }
+
+    if (cleared) {
       consumed.add(key);
       gone += 1;
-    } catch {
+    } else {
       kept.add(key);
     }
   }

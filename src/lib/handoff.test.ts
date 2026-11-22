@@ -482,6 +482,58 @@ describe('durable queue', () => {
     }
   });
 
+  it('holds the per-take lock when discarding one take', async () => {
+    // Discards must serialize with claims on the same take: a claim that
+    // verified the row first must finish its delete before a discard deletes
+    // underneath it, or the claim delivers a take the user just discarded.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    const requested: string[] = [];
+    holder.locks = {
+      request: (name: string, work: () => Promise<unknown>) => {
+        requested.push(name);
+        return work();
+      },
+    };
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      const [queued] = queuedTakes('convert');
+
+      expect(await discardHandoff('convert', queued.key)).toBe(true);
+      expect(requested).toContain(`chatter-box-handoff-take-${queued.key}`);
+    } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
+  it('holds the per-take lock for every take a clear removes', async () => {
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    const requested: string[] = [];
+    holder.locks = {
+      request: (name: string, work: () => Promise<unknown>) => {
+        requested.push(name);
+        return work();
+      },
+    };
+    try {
+      sendHandoff('convert', item);
+      sendHandoff('convert', { ...item, name: 'Second take' });
+      await flushHandoffWrites();
+      const keys = queuedTakes('convert').map((take) => take.key);
+
+      expect(await discardHandoffQueue('convert')).toBe(2);
+      for (const key of keys) {
+        expect(requested).toContain(`chatter-box-handoff-take-${key}`);
+      }
+    } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
   it('deletes the row before handing the take over, so a take is never replayed', async () => {
     // The crash tradeoff, pinned. The loss window runs from the row's delete
     // resolving to the caller applying the take, with no awaits in between
