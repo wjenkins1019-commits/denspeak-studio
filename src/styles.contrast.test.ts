@@ -81,7 +81,9 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['--accent-2', '--bg'],
   ['--accent-2', '--bg-2'],
   ['--danger', '--bg'],
+  ['--danger', '--bg-2'],
   ['--warm', '--bg'],
+  ['--warm', '--bg-2'],
 ];
 
 const THEMES = [
@@ -113,10 +115,13 @@ describe.each(THEMES)('$theme theme', ({ selector }) => {
     }
   });
 
-  it('keeps the panel focus ring visible on the panel surface', () => {
+  it('keeps the focus ring visible on the page and on the panel', () => {
     // A non-text indicator only needs 3:1, but it is drawn in the same teal as
-    // the labels, so it should not be the thing that looks faint.
-    const ratio = contrast(token(block, '--accent-2'), token(block, '--bg-2'));
-    expect(ratio, `--accent-2 on --bg-2 is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+    // the labels, so it should not be the thing that looks faint. On the page it
+    // is the rail count's ring; on the panel, the QueuePanel buttons'.
+    for (const surface of ['--bg', '--bg-2']) {
+      const ratio = contrast(token(block, '--accent-2'), token(block, surface));
+      expect(ratio, `--accent-2 on ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+    }
   });
 });
