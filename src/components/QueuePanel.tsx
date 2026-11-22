@@ -31,9 +31,9 @@ export function QueuePanel({
   const panel = useRef<HTMLElement | null>(null);
   const heading = useRef<HTMLHeadingElement | null>(null);
   const list = useRef<HTMLUListElement | null>(null);
-  // The row index that had focus when a removal was asked for, with the queue as
-  // it was then, so focus only moves if the list actually changed.
-  const removal = useRef<{ index: number; keys: string } | null>(null);
+  // The row a removal was asked for, held until the list actually changes, so a
+  // delete the store refuses neither moves focus nor banks the request.
+  const removal = useRef<{ key: string | null; index: number; count: number } | null>(null);
   const keys = takes.map((take) => take.key).join('|');
   const empty = takes.length === 0;
 
@@ -77,13 +77,17 @@ export function QueuePanel({
   // for and sits above the line saying nothing is queued now.
   useEffect(() => {
     const asked = removal.current;
-    // The store would not let the row go, so the list still reads the same: no
-    // focus was lost, and it must not be pulled away from wherever the reader
-    // has moved on to since.
-    if (!asked || asked.keys === keys) return;
+    if (!asked) return;
     removal.current = null;
 
     const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>('[data-discard]') ?? [])];
+    // The store would not let the row go: it is still listed, so nothing was
+    // lost to focus, and the request is spent rather than left waiting to pull
+    // focus back to that row the next time the queue changes for any reason.
+    if (asked.key !== null && rows.some((row) => row.dataset.discard === asked.key)) return;
+    // The same for a clear the store refused outright.
+    if (asked.key === null && rows.length >= asked.count) return;
+
     const next = rows[Math.min(asked.index, rows.length - 1)];
     (next ?? heading.current)?.focus();
   }, [keys]);
@@ -146,10 +150,10 @@ export function QueuePanel({
               </div>
               <button
                 className="btn ghost small"
-                data-discard
+                data-discard={take.key}
                 aria-label={`Discard ${take.name}`}
                 onClick={() => {
-                  removal.current = { index, keys };
+                  removal.current = { key: take.key, index, count: takes.length };
                   onDiscard(take.key);
                 }}
               >
@@ -167,7 +171,7 @@ export function QueuePanel({
             <button
               className="btn ghost small danger"
               onClick={() => {
-                removal.current = { index: 0, keys };
+                removal.current = { key: null, index: 0, count: takes.length };
                 onClear();
               }}
             >

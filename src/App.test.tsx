@@ -358,7 +358,7 @@ describe('hand-off navigation', () => {
     expect(store.rows.size).toBe(0);
   });
 
-  it('keeps a take the panel could not delete, and says so', async () => {
+  it('keeps a take the panel could not delete, and leaves focus where the reader has it', async () => {
     const store = new StubbornStore();
     setHandoffStore(store);
     render(
@@ -370,22 +370,39 @@ describe('hand-off navigation', () => {
 
     await act(async () => {
       sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Another take', blob: new Blob(['b']), duration: 2 });
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /1 take waiting for Song/ }));
+      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
     });
 
     const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    const discard = screen.getByRole('button', { name: 'Discard A take' });
+    discard.focus();
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
+      fireEvent.click(discard);
     });
 
     // Still listed, because its row is still there; the panel explains why
     // instead of dropping it and letting it arrive again on the next run.
     expect(panel.textContent).toContain('A take');
     expect(panel.textContent).toContain('its saved copy is still there');
-    expect(store.rows.size).toBe(1);
+    expect(store.rows.size).toBe(2);
+    // Nothing left the list, so nothing was taken from focus either: it is still
+    // on the button that was pressed.
+    expect(document.activeElement).toBe(discard);
+
+    // The refused request is spent, not banked: a take arriving afterwards is no
+    // reason to pull focus back to a row the reader has since moved off.
+    const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
+    heading.focus();
+    await act(async () => {
+      sendHandoff('song', { name: 'Late take', blob: new Blob(['c']), duration: 3 });
+    });
+
+    expect(panel.textContent).toContain('Late take');
+    expect(document.activeElement).toBe(heading);
   });
 
   it('takes the notice\'s way back to the section the take came from', async () => {
