@@ -453,6 +453,35 @@ describe('durable queue', () => {
     }
   });
 
+  it('does not deliver a locally-sent take another tab claimed first, once its put landed', async () => {
+    // The sender-tab residual: this tab sent the take (not hydrated), its
+    // put landed, then the other tab took it — the row is gone while this
+    // tab's copy is still queued. Once the put is known on disk the sender
+    // can verify the row inside the claim lock like a hydrated take, so
+    // only the winner delivers it.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = {
+      request: (_name: string, work: () => Promise<unknown>) => work(),
+    };
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      expect(store.rows.size).toBe(1);
+
+      // The other tab takes it: the row is gone, this copy is stale.
+      const [row] = [...store.rows.keys()];
+      await store.remove(row);
+      expect(store.rows.size).toBe(0);
+
+      expect(await takeHandoff('convert')).toBeNull();
+      expect(pendingCount('convert')).toBe(0);
+    } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
   it('deletes the row before handing the take over, so a take is never replayed', async () => {
     // The crash tradeoff, pinned. The loss window runs from the row's delete
     // resolving to the caller applying the take, with no awaits in between

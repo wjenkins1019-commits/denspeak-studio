@@ -74,13 +74,12 @@ export const indexedDbHandoffStore: HandoffStore = {
   },
 
   async put(record: HandoffRecord): Promise<void> {
-    if (!hasDatabase()) return;
-    try {
-      const db = await openDb();
-      await requestToPromise(db.transaction(STORE, 'readwrite').objectStore(STORE).put(record));
-    } catch {
-      // Storage unavailable; the take stays queued in memory for this run.
-    }
+    // Left to throw on purpose: a take counts as stored only once its put
+    // lands, so a failure must leave it unmarked — the take stays queued in
+    // memory for this run and its row missing proves nothing about another tab.
+    if (!hasDatabase()) throw new Error('Hand-off store unavailable');
+    const db = await openDb();
+    await requestToPromise(db.transaction(STORE, 'readwrite').objectStore(STORE).put(record));
   },
 
   async remove(key: string): Promise<void> {

@@ -121,6 +121,13 @@ interface Pending {
    * nothing about another tab.
    */
   hydrated: boolean;
+  /**
+   * Whether the row is known on disk. Hydrated takes were read from there;
+   * a take this run sent becomes stored when its queued put lands. Only a
+   * stored take verifies its row inside the cross-tab lock — before the put
+   * lands the row missing proves nothing, so the take is claimed as before.
+   */
+  stored: boolean;
 }
 
 /**
@@ -232,7 +239,7 @@ function hydrate(): Promise<void> {
           if (held.has(row.key)) continue;
 
           const list = byTarget.get(row.target) ?? [];
-          list.unshift({ item: row.item, key: row.key, at: row.at, hydrated: true });
+          list.unshift({ item: row.item, key: row.key, at: row.at, hydrated: true, stored: true });
           byTarget.set(row.target, list);
         }
 
@@ -279,17 +286,27 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
     return;
   }
 
-  const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const at = Date.now();
+  const entry: Pending = { item, key, at, hydrated: false, stored: false };
   const queue = pending.get(target);
-  if (queue) queue.push({ item, key, at, hydrated: false });
-  else pending.set(target, [{ item, key, at, hydrated: false }]);
+  if (queue) queue.push(entry);
+  else pending.set(target, [entry]);
 
   queuesChanged();
 
   // Written, then pruned: a section nobody opens must not collect takes on disk
-  // for ever.
-  write(() => store.put({ key, target, at, item }).then(() => pruneStored()));
+  // for ever. The take counts as stored only once its put lands — only then
+  // can a missing row mean another tab claimed it rather than this tab's
+  // write queue not having caught up yet.
+  write(() =>
+    store
+      .put({ key, target, at, item })
+      .then(() => {
+        entry.stored = true;
+      })
+      .then(() => pruneStored()),
+  );
 }
 
 /**
@@ -436,14 +453,14 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
     const head = pending.get(target)?.[0];
     if (!head) return { status: 'empty' };
 
-    // A hydrated take may have been claimed by another tab since: only the
-    // tab that deletes the row may deliver it, so the row is checked inside
-    // the cross-tab lock. The loser drops its stale copy and tries whatever
-    // is queued behind it. A take this run sent skips the check — its put
-    // may still be landing in this tab's write queue — and is claimed as
-    // before. A lock that will not grant falls back the same way rather
+    // A stored take may have been claimed by another tab since: only the tab
+    // that deletes the row may deliver it, so the row is checked inside the
+    // cross-tab lock. The loser drops its stale copy and tries whatever is
+    // queued behind it. A take whose put has not landed yet skips the check
+    // — its row missing proves nothing about another tab — and is claimed
+    // as before. A lock that will not grant falls back the same way rather
     // than leave the take stuck.
-    if (head.hydrated && claimLock()) {
+    if (head.stored && claimLock()) {
       try {
         const outcome = await claimHydratedHead(target, head);
         if (outcome.status !== 'stolen') return outcome;
@@ -479,11 +496,11 @@ async function claimHead(target: HandoffTarget): Promise<Claim> {
 }
 
 /**
- * Claim a take this run hydrated, holding its cross-tab lock. Answers
- * `stolen` when the row is already gone — another tab claimed or discarded
- * it, or it was pruned — after dropping this tab's stale copy so it can
- * never be replayed. Storage that will not answer leaves the take to the
- * normal claim, since its absence then proves nothing.
+ * Claim a take known on disk, holding its cross-tab lock. Answers `stolen`
+ * when the row is already gone — another tab claimed or discarded it, or it
+ * was pruned — after dropping this tab's stale copy so it can never be
+ * replayed. Storage that will not answer leaves the take to the normal
+ * claim, since its absence then proves nothing.
  */
 async function claimHydratedHead(
   target: HandoffTarget,
@@ -608,8 +625,14 @@ function restoreQueued(target: HandoffTarget, entry: Pending): void {
 function putBackHandoff(target: HandoffTarget, entry: Pending): void {
   restoreQueued(target, entry);
   // The row went before the listener did; store it again so the take is not
-  // left in memory only.
-  write(() => store.put({ key: entry.key, target, at: entry.at, item: entry.item }));
+  // left in memory only. Until that put lands the row missing proves nothing,
+  // so the take is unmarked as stored and claimed as before.
+  entry.stored = false;
+  write(() =>
+    store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(() => {
+      entry.stored = true;
+    }),
+  );
 }
 
 /**
