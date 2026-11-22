@@ -345,6 +345,9 @@ small {
 
 .queue-news {
   margin: 0 0 10px;
+  /* Two or three short sentences: wrapped evenly they break between sentences
+     rather than leaving "takes." or "waiting." alone on a line of its own. */
+  text-wrap: balance;
 }
 
 /* A line that is not being said takes no room, so a quiet panel and an empty one
