@@ -3,8 +3,9 @@
 // screenshot. WCAG AA for normal text is 4.5:1, and that is the bar each pair
 // below holds to — body and quiet labels, accent text, the focus ring, the text
 // on accent-filled surfaces (the primary button's gradient at both ends, and the
-// rail's count badge, which is filled with --accent), and the text over the
-// accent washes the page gradient lays across the top of the window.
+// rail's count badge, which is filled with --accent), the text over the
+// accent washes the page gradient lays across the top of the window, and the
+// graph labels over the glow the EQ graph paints over its background.
 //
 // Every theme block in the file is measured, and every token has to be named by
 // a check or declared as painting no text, so a new theme or colour cannot be
@@ -91,6 +92,9 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['--warm', '--bg-2'],
   // The EQ graph's readout label sits on its own chip.
   ['--text', '--readout'],
+  // The graph's axis labels sit on its glow, over both ends of its background.
+  ['--dim', '--graph'],
+  ['--dim', '--graph-soft'],
   // The danger note sits on its own tinted box, not on the page.
   ['--danger-text', '--danger-bg'],
   // Cards, panels and the rail's active item are translucent surfaces with
@@ -305,13 +309,68 @@ function backgroundWashes(block: string): Colour[] {
   }));
 }
 
+/**
+ * The EQ graph's background as painted: a glow radial over a surface
+ * gradient, read from the `.eq-graph` rule and its per-theme overrides rather
+ * than the tokens, because the light theme repaints both layers with its own
+ * strengths. A background in any other shape leaves a layer out of the stack
+ * the axis labels are measured on, so one that does not read whole is refused
+ * rather than skipped.
+ */
+function graphLayers(source: string, theme: string, block: string): { glow: Colour; top: Colour; bottom: Colour } {
+  const rules = [...source.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  const backgrounds = new Map<string, string>();
+  const put = (key: string, value: string) => {
+    if (backgrounds.has(key)) throw new Error(`two EQ graph backgrounds read for "${key}"`);
+    backgrounds.set(key, value);
+  };
+  for (const rule of rules) {
+    const selector = rule[1].replace(/\s+/g, ' ').trim();
+    const background = rule[2]
+      .split(';')
+      .find((part) => part.slice(0, part.indexOf(':')).trim().toLowerCase() === 'background');
+    if (!background) continue;
+    if (selector === '.eq-graph') put('default', background.slice(background.indexOf(':') + 1));
+    else if (selector.includes('.eq-graph')) {
+      const override = selector.match(/^:root\[data-theme='([a-z0-9_-]+)'\] \.eq-graph$/);
+      if (!override) throw new Error(`the EQ graph background in "${selector}" names no theme this reader knows`);
+      put(override[1], background.slice(background.indexOf(':') + 1));
+    }
+  }
+
+  const background = backgrounds.get(theme) ?? backgrounds.get('default');
+  if (!background) throw new Error('the EQ graph paints no background to read');
+
+  const paint = '(var\\(--[a-z0-9-]+\\)|#[0-9a-f]{6}|rgba?\\([^)]+\\))';
+  const layers = background.trim().match(
+    new RegExp(
+      `^radial-gradient\\(\\s*[\\d.]+%\\s+[\\d.]+%\\s+at\\s+[\\d.]+%\\s+-?[\\d.]+%\\s*,\\s*${paint}\\s*,\\s*transparent\\s+[\\d.]+%\\s*\\)\\s*,\\s*` +
+        `linear-gradient\\(\\s*180deg\\s*,\\s*${paint}\\s*,\\s*${paint}\\s*\\)$`,
+      'i',
+    ),
+  );
+  if (!layers) {
+    throw new Error(`the EQ graph background reads in no shape this reader knows: ${background.trim()}`);
+  }
+
+  const resolve = (value: string): Colour => {
+    const ref = value.trim().match(/^var\((--[a-z0-9-]+)\)$/i);
+    return ref ? token(block, ref[1]) : colour(value.trim());
+  };
+
+  return { glow: resolve(layers[1]), top: resolve(layers[2]), bottom: resolve(layers[3]) };
+}
+
 /** Token names a theme block defines. */
 const tokensIn = (block: string) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]);
 
 /**
- * Tokens that paint no colour of their own: lines and borders, shadows and
- * glows, the page's background image and geometry. The rail's washes are not
- * here — their stops are measured under the rail's text.
+ * Tokens that paint no colour of their own: lines and borders, shadows, the
+ * page's background image and geometry. The rail's washes are not here — their
+ * stops are measured under the rail's text — and neither is --glow, which the
+ * graph paints over its background under its labels. The other places --glow
+ * appears are not surfaces text sits on: the input focus ring surrounds its
+ * field, and the curve's drop-shadow follows its line.
  */
 const NOT_TEXT = new Set([
   '--radius',
@@ -321,7 +380,6 @@ const NOT_TEXT = new Set([
   '--line-strong',
   '--danger-border',
   '--glass-inner',
-  '--glow',
   '--bg-image',
   '--shadow-card',
   '--shadow-brand',
@@ -337,6 +395,8 @@ const MEASURED = new Set<string>([
   // Measured as the gradient the rail and its active item paint with.
   '--rail-bg',
   '--active-nav',
+  // Measured as the radial the EQ graph paints over its background.
+  '--glow',
 ]);
 
 /**
@@ -967,10 +1027,63 @@ describe('what the scans read', () => {
       expect(() => backgroundWashes(block), block).toThrow(/radial washes/);
     }
   });
+
+  it('reads the graph background, following a theme override', () => {
+    const block =
+      '--bg: #f5f8fd; --surface: rgba(255, 255, 255, 0.92); --surface-soft: rgba(255, 255, 255, 0.7); --glow: rgba(26, 111, 212, 0.18);';
+    const base =
+      ':root {\n' +
+      `  ${block}\n` +
+      '}\n' +
+      '.eq-graph {\n' +
+      '  background:\n' +
+      '    radial-gradient(120% 90% at 50% -25%, var(--glow), transparent 62%),\n' +
+      '    linear-gradient(180deg, var(--surface), var(--surface-soft));\n' +
+      '}';
+
+    // Tokens where the rule names them.
+    expect(graphLayers(base, 'default', block).glow).toEqual(token(block, '--glow'));
+    expect(graphLayers(base, 'default', block).bottom).toEqual(token(block, '--surface-soft'));
+    // A theme with no override of its own falls back to the base rule.
+    expect(graphLayers(base, 'sepia', block).glow).toEqual(token(block, '--glow'));
+
+    const themed =
+      base +
+      '\n:root[data-theme=\'light\'] .eq-graph {\n' +
+      '  background:\n' +
+      '    radial-gradient(120% 90% at 50% -25%, rgba(26, 111, 212, 0.07), transparent 62%),\n' +
+      '    linear-gradient(180deg, #ffffff, #f6f9fd);\n' +
+      '}';
+
+    // Literals where the override repaints the layers with its own strengths.
+    expect(graphLayers(themed, 'light', block).glow).toEqual(colour('rgba(26, 111, 212, 0.07)'));
+    expect(graphLayers(themed, 'light', block).bottom).toEqual(colour('#f6f9fd'));
+  });
+
+  it('refuses a graph background it cannot read whole', () => {
+    const block = '--bg: #f5f8fd; --surface: rgba(255, 255, 255, 0.92); --surface-soft: rgba(255, 255, 255, 0.7); --glow: rgba(26, 111, 212, 0.18);';
+    const background =
+      'radial-gradient(120% 90% at 50% -25%, var(--glow), transparent 62%), ' +
+      'linear-gradient(180deg, var(--surface), var(--surface-soft))';
+    const sheet = (painted: string) => `:root {\n  ${block}\n}\n.eq-graph {\n  background: ${painted};\n}`;
+
+    // Each would otherwise leave a layer out of the stack the labels sit on.
+    const swapped = background.replace('var(--glow), transparent 62%', 'transparent 62%, var(--glow)');
+    const third = background.replace('transparent 62%), linear', 'transparent 62%, rgba(0, 0, 0, 0.2)), linear');
+    for (const painted of [swapped, third]) {
+      expect(() => graphLayers(sheet(painted), 'default', block), painted).toThrow(/no shape/);
+    }
+  });
 });
 
 /** The surfaces the pairs are measured on, each translucent one composited. */
-function surfacesOf(block: string): Record<string, Colour> {
+function surfacesOf(block: string, theme: string, source = css): Record<string, Colour> {
+  // The graph's glow at its full strength, which the radial only reaches near
+  // the top edge: everywhere else the labels sit on less of it, so measuring
+  // the full layer errs towards the stricter check.
+  const graph = graphLayers(source, theme, block);
+  const graphTop = over(graph.top, token(block, '--bg'));
+  const graphBottom = over(graph.bottom, token(block, '--bg'));
   return {
     '--bg': token(block, '--bg'),
     '--bg-2': token(block, '--bg-2'),
@@ -983,13 +1096,15 @@ function surfacesOf(block: string): Record<string, Colour> {
     '--panel-strong': over(token(block, '--panel-strong'), token(block, '--bg')),
     '--surface': over(token(block, '--surface'), token(block, '--bg')),
     '--surface-soft': over(token(block, '--surface-soft'), token(block, '--bg')),
+    '--graph': over(graph.glow, graphTop),
+    '--graph-soft': over(graph.glow, graphBottom),
     '--active-soft': over(token(block, '--active-soft'), token(block, '--bg')),
     '--active-strong': over(token(block, '--active-strong'), token(block, '--bg')),
   };
 }
 
-describe.each(THEMES)('$theme theme', ({ block }) => {
-  const surfaces = surfacesOf(block);
+describe.each(THEMES)('$theme theme', ({ theme, block }) => {
+  const surfaces = surfacesOf(block, theme);
 
   it.each(TEXT_PAIRS)('keeps %s readable on %s', (fgToken, bgToken) => {
     const ratio = contrast(token(block, fgToken), surfaces[bgToken]);
@@ -1109,8 +1224,8 @@ for (const [fg, bg] of TEXT_PAIRS) if (!TEXT_SURFACE.has(fg)) TEXT_SURFACE.set(f
 TEXT_SURFACE.set('--primary-text', '--accent');
 
 /** Every text gate of one theme, with the ratio it measured. */
-function textGates(block: string): Array<{ label: string; ratio: number }> {
-  const surfaces = surfacesOf(block);
+function textGates(block: string, theme: string, source = css): Array<{ label: string; ratio: number }> {
+  const surfaces = surfacesOf(block, theme, source);
   const rows: Array<{ label: string; ratio: number }> = [];
   const gate = (label: string, ratio: number) => rows.push({ label, ratio });
 
@@ -1158,8 +1273,8 @@ function textGates(block: string): Array<{ label: string; ratio: number }> {
 }
 
 /** The text gates that fall below `bar`, as the failures the tests would report. */
-function textFailures(block: string, bar = 4.5): string[] {
-  return textGates(block)
+function textFailures(block: string, theme: string, bar = 4.5, source = css): string[] {
+  return textGates(block, theme, source)
     .filter(({ ratio }) => ratio < bar)
     .map(({ label, ratio }) => `${label} is ${ratio.toFixed(2)}:1`);
 }
@@ -1213,7 +1328,7 @@ describe('what the guard catches', () => {
     // Ties the weakened runs to the real gates: if this mirror drifts from the
     // tests above, the file itself starts failing here.
     const failures = THEMES.flatMap(({ theme, block }) =>
-      textFailures(block).map((failure) => `${theme}: ${failure}`),
+      textFailures(block, theme).map((failure) => `${theme}: ${failure}`),
     );
     expect(failures).toEqual([]);
   });
@@ -1229,7 +1344,7 @@ describe('what the guard catches', () => {
     expect(themes.length, 'the weakened copy no longer parses into theme blocks').toBe(THEMES.length);
 
     const failures = themes.flatMap(({ theme, block }) =>
-      textFailures(block).map((failure) => `${theme}: ${failure}`),
+      textFailures(block, theme, 4.5, source).map((failure) => `${theme}: ${failure}`),
     );
     expect(failures, `${name} was weakened and no check failed`).not.toEqual([]);
     // The failure has to be about the token that was weakened, not some other
@@ -1248,13 +1363,13 @@ const MARGIN = 0.2;
 
 describe.each(THEMES)('$theme theme margin', ({ theme, block }) => {
   it('clears the AA floor by a visible margin', () => {
-    const tightest = textGates(block)
+    const tightest = textGates(block, theme)
       .sort((a, b) => a.ratio - b.ratio)
       .slice(0, 3)
       .map(({ label, ratio }) => `${label} ${ratio.toFixed(2)}:1 (+${(ratio - 4.5).toFixed(2)})`);
 
     console.info(`${theme}: tightest text pairs — ${tightest.join('; ')}`);
 
-    expect(textFailures(block, 4.5 + MARGIN)).toEqual([]);
+    expect(textFailures(block, theme, 4.5 + MARGIN)).toEqual([]);
   });
 });
