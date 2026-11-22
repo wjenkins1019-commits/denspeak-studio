@@ -540,6 +540,39 @@ describe('hand-off navigation', () => {
     expect(panel.textContent).toContain('Another take');
   });
 
+  it('says in the panel which take is being discarded, and that a clear is under way', async () => {
+    const store = new HungStore();
+    const panel = await openSongQueue(['A take', 'Another take'], store);
+    setClearTimeout(20);
+
+    // Standing from the first render, so filling it later is what gets read.
+    const news = within(panel).getByRole('status');
+    expect(news.textContent).toBe('');
+
+    // Synchronous, so the deadline cannot pass between the press and the check.
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Discard A take' }));
+    });
+
+    // The row's own name changes to say it is working, but that is a name under
+    // the focus the press just put there; the panel says it out loud instead.
+    expect(news.textContent).toBe('Discarding “A take”.');
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear all 2' }));
+    });
+
+    // One region for the whole panel: what is still being discarded is said
+    // beside the clear, not in a second region or on the button alone.
+    expect(news.textContent).toBe('Discarding “A take”. Clearing 2 takes.');
+
+    // Both settle, and the line goes: a busy announcement outliving its wait
+    // would read as work that never finished.
+    expect(await screen.findByText(/Couldn’t remove 2 takes/)).toBeTruthy();
+    expect(news.textContent).toBe('');
+    expect(panel.textContent).toContain('A take');
+  });
+
   it('says a take could not be opened when the store hangs instead of refusing', async () => {
     const store = new HungStore();
     setHandoffStore(store);

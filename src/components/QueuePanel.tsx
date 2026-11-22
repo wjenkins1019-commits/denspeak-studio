@@ -49,6 +49,20 @@ export function QueuePanel({
   const removal = useRef<{ key: string | null; index: number; count: number } | null>(null);
   const keys = takes.map((take) => take.key).join('|');
   const empty = takes.length === 0;
+  // What the panel is in the middle of. Said in the standing region below rather
+  // than left to the button's own name: a name that changes under the focus the
+  // press put there is not reliably read out again.
+  const discarding = takes.filter((take) => busy.discards.includes(take.key));
+  const working = [
+    discarding.length === 0
+      ? ''
+      : discarding.length === 1
+        ? `Discarding “${discarding[0].name}”`
+        : `Discarding ${discarding.length} takes`,
+    busy.clearing ? `Clearing ${takes.length === 1 ? '1 take' : `${takes.length} takes`}` : '',
+  ]
+    .filter(Boolean)
+    .join('. ');
 
   useEffect(() => {
     heading.current?.focus();
@@ -121,12 +135,12 @@ export function QueuePanel({
             <h2 id="queue-panel-title" ref={heading} tabIndex={-1}>
               Waiting for {label}
             </h2>
-            {/* What a discard or a clear can leave unsaid: once no rows are left
-                there is no button to land on and no row name to read. The
-                region stands here from the first render and only the empty
-                result fills it, so the count is not read out after every
-                discard on top of the row that just took the focus. The count
-                sits outside the region and is still there to be read. */}
+            {/* What cannot be read off a button: work that is under way while
+                its button's name changes under the focus the press left there,
+                and the empty result once there are no rows to land on. One
+                standing region carries both, present from the first render, so
+                a change is spoken however focus got where it is. The count sits
+                outside it and is still there to be read. */}
             <small className="muted">
               <span>
                 {empty
@@ -136,7 +150,7 @@ export function QueuePanel({
                     : `${takes.length} takes queued`}
               </span>
               <span role="status" aria-atomic="true">
-                {empty ? 'Nothing queued now.' : ''}
+                {working ? `${working}.` : empty ? 'Nothing queued now.' : ''}
               </span>
             </small>
           </div>
