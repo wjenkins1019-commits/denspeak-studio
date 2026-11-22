@@ -345,7 +345,9 @@ function withoutComments(source: string): string {
 function inlineColours(label: string, source: string): string[] {
   const text = withoutComments(source);
   const offences: string[] = [];
+  const reported = new Set<number>();
   const note = (index: number, fragment: string) => {
+    reported.add(index);
     const line = text.slice(0, index).split('\n').length;
     offences.push(`${label}:${line}  ${fragment.trim()}`);
   };
@@ -383,6 +385,17 @@ function inlineColours(label: string, source: string): string[] {
     }
 
     flagNames(value, at, match[1]);
+  }
+
+  // A bare name is a colour too: `export const TINT = 'white'` has no property
+  // or attribute to bring it in, so any string that is nothing but a colour
+  // name is reported. Already-reported strings are skipped, keeping each one
+  // against the property that gave it context.
+  for (const match of text.matchAll(QUOTED)) {
+    const index = match.index ?? 0;
+    if (reported.has(index)) continue;
+    if (!NAMED_COLOURS.has(match[2].trim().toLowerCase())) continue;
+    note(index, match[0]);
   }
 
   return offences;
@@ -498,6 +511,17 @@ describe('what the scans read', () => {
     const source = "const s = { color: theme === 'light' ? 'var(--text)' : 'var(--text-2)' };";
 
     expect(inlineColours('Tint.tsx', source)).toEqual([]);
+  });
+
+  it('finds a bare colour name in a plain module', () => {
+    const source = [
+      "export const TINT = 'white';",
+      "export const FLAT = 'tomato';",
+      "export const LABEL = 'white noise';",
+      "export const MODE = 'light';",
+    ].join('\n');
+
+    expect(inlineColours('theme.ts', source)).toEqual(["theme.ts:1  'white'", "theme.ts:2  'tomato'"]);
   });
 
   it('checks a colour handed through a call', () => {
