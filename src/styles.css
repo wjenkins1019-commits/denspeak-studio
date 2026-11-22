@@ -372,6 +372,12 @@ small {
   border-top: 1px solid var(--line-soft);
 }
 
+/* Nothing to divide, so the rule that heads the rows goes with them; on an
+   empty queue it read as a stray line under "Nothing queued now." */
+.queue-list:empty {
+  border-top: none;
+}
+
 .queue-list li {
   display: flex;
   align-items: center;
