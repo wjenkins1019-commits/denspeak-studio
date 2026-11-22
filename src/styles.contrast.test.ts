@@ -129,15 +129,43 @@ const ACCENT_FILLS = ['--accent-2', '--accent'];
 /** Surfaces the focus ring is drawn against. */
 const RING_SURFACES = ['--bg', '--bg-2'];
 
-/** Every theme block in a stylesheet, so a third theme is measured too. */
+/**
+ * Every theme block in a stylesheet, so a third theme is measured too.
+ *
+ * A theme owns a root selector that stands alone: `:root`, or `:root[data-theme=
+ * '…']`. Written in a selector list (`:root, :root[data-theme='x']`) or with
+ * something after it, the pattern below would not see it, so the rule count that
+ * follows turns that into a failure rather than a theme nothing measures.
+ */
 function themesIn(source: string) {
-  return [...source.matchAll(/^(:root(?:\[[^\]]*\])?)\s*\{/gm)].map((match) => {
+  const themes = [...source.matchAll(/^[ \t]*(:root(?:\[[^\]]*\])?)[ \t]*\{/gm)].map((match) => {
     const selector = match[1];
     const open = (match.index ?? 0) + match[0].length - 1;
-    const named = selector.match(/data-theme=['"]([a-z-]+)['"]/);
+    const named = selector.match(/data-theme=['"]([a-z0-9_-]+)['"]/);
 
     return { theme: named ? named[1] : 'default', selector, block: source.slice(open + 1, source.indexOf('}', open)) };
   });
+
+  // Two blocks read as the same theme would be measured twice under one title.
+  const names = new Set<string>();
+  for (const { theme } of themes) {
+    if (names.has(theme)) throw new Error(`two theme blocks read as "${theme}"`);
+    names.add(theme);
+  }
+
+  // Every rule that declares itself a root block, comments aside, has to be one
+  // of the themes read above.
+  const roots = [
+    ...source.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g),
+  ].filter(([, selector]) =>
+    selector.split(',').some((part) => /^:root(?:\[[^\]]*\])?$/.test(part.trim())),
+  );
+
+  if (roots.length !== themes.length) {
+    throw new Error(`${roots.length} root blocks in the stylesheet, ${themes.length} read as themes`);
+  }
+
+  return themes;
 }
 
 const THEMES = themesIn(css);
@@ -178,57 +206,103 @@ function windowSizes(): Array<{ width: number; height: number }> {
   // Windows puts roughly this much chrome above the page; taking it off can
   // only deepen the wash measured below, so it errs towards the stricter check.
   const smallest = { width: option('minWidth') - 16, height: option('minHeight') - 100 };
-  // A maximised window on a large screen, so the range is not just one point.
-  const widest = { width: 2560, height: 1440 };
 
-  return [smallest, opened, widest];
+  // These two are the whole range, not a sample: the wash's centre moves with
+  // the window while its radii stay fixed pixels, so a bigger window is never
+  // deeper, and the test below holds that. A third size would measure nothing
+  // the smallest does not.
+  return [smallest, opened];
 }
 
 const WINDOW_SIZES = windowSizes();
 
 /**
- * The deepest each wash in --bg-image gets inside the window. A radial gradient
- * fades from its centre, so its stop alpha is only reached off-canvas; the
- * window's corners, taken at the sizes the gradient declares, are as strong as
- * it paints where text can sit.
+ * The colour stops a gradient token declares, in source order. A stop written in
+ * a form this reader does not know would leave a layer out of the stack it is
+ * measured in, so one it cannot parse is refused rather than skipped.
  */
-/** The colour stops a gradient token declares, in source order. */
 function gradientStops(block: string, name: string): Colour[] {
-  return [...tokenText(block, name).matchAll(/#[0-9a-f]{6}\b|rgba?\([^)]+\)/gi)].map((match) => colour(match[0]));
+  const value = tokenText(block, name);
+  const readable = /#[0-9a-f]{6}\b|rgba?\([^)]+\)/gi;
+  const stops = [...value.matchAll(readable)].map((match) => colour(match[0]));
+
+  const leftover = value.replace(readable, '');
+  if (/#[0-9a-f]|\brgba?\(|\bhsla?\(/i.test(leftover)) {
+    throw new Error(`${name} has a colour stop this reader cannot parse: ${value}`);
+  }
+
+  return stops;
 }
 
-function backgroundWashes(block: string): Colour[] {
+/** A radial wash from --bg-image, with the geometry it fades over. */
+type Wash = {
+  colour: Colour;
+  radius: { x: number; y: number };
+  /** As a fraction of the viewport, the way the token writes it. */
+  centre: { x: number; y: number };
+  /** Where the alpha reaches zero, as a fraction of the ray to the ellipse. */
+  fade: number;
+};
+
+/**
+ * The radial washes --bg-image paints, each read as
+ * `<x>px <y>px at <x>% <y>%, <colour>, transparent <n>%`.
+ *
+ * Percentage stops are measured along the ray from the centre to the ellipse's
+ * edge, which is the same normalised distance `washDepth` computes, so a stop
+ * means what this reads it as. Any other shape — the stops swapped, a third
+ * stop, a hex colour — leaves a wash unread, so the count below refuses it
+ * instead of quietly measuring fewer washes than the page paints.
+ */
+function pageWashes(block: string): Wash[] {
   const value = tokenText(block, '--bg-image');
-  const washes: Colour[] = [];
+  const declared = (value.match(/radial-gradient\(/g) ?? []).length;
 
-  for (const match of value.matchAll(
-    /radial-gradient\(\s*([\d.]+)px\s+([\d.]+)px\s+at\s+([\d.]+)%\s+(-?[\d.]+)%\s*,\s*(rgba?\([^)]+\))\s*,\s*transparent\s+([\d.]+)%/g,
-  )) {
-    const [, radiusX, radiusY, atX, atY, stop, fade] = match;
-    const wash = colour(stop);
-    let deepest = 0;
+  const washes = [
+    ...value.matchAll(
+      /radial-gradient\(\s*([\d.]+)px\s+([\d.]+)px\s+at\s+([\d.]+)%\s+(-?[\d.]+)%\s*,\s*(rgba?\([^)]+\))\s*,\s*transparent\s+([\d.]+)%\s*\)/g,
+    ),
+  ].map(([, radiusX, radiusY, atX, atY, stop, fade]) => ({
+    colour: colour(stop),
+    radius: { x: Number(radiusX), y: Number(radiusY) },
+    centre: { x: Number(atX) / 100, y: Number(atY) / 100 },
+    fade: Number(fade) / 100,
+  }));
 
-    // The wash is strongest at the point of the page nearest the gradient's
-    // centre, which for a centre above the top edge is the top edge itself —
-    // where the page heading sits. Its rates are fixed pixels while its centre
-    // moves with the window, so every window size is sampled.
-    for (const { width, height } of WINDOW_SIZES) {
-      const centre = { x: (Number(atX) / 100) * width, y: (Number(atY) / 100) * height };
-      const nearest = {
-        x: Math.min(Math.max(centre.x, 0), width),
-        y: Math.min(Math.max(centre.y, 0), height),
-      };
-      const from = Math.hypot(
-        (nearest.x - centre.x) / Number(radiusX),
-        (nearest.y - centre.y) / Number(radiusY),
-      );
-      deepest = Math.max(deepest, Math.max(0, 1 - from / (Number(fade) / 100)));
-    }
-
-    if (deepest > 0) washes.push({ rgb: wash.rgb, alpha: wash.alpha * deepest });
+  if (washes.length !== declared) {
+    throw new Error(
+      `--bg-image declares ${declared} radial washes, ${washes.length} read as a colour fading to transparent`,
+    );
   }
 
   return washes;
+}
+
+/**
+ * How much of a wash's alpha lands at its strongest point inside a viewport:
+ * the point of the page nearest the gradient's centre, which for a centre above
+ * the top edge is the top edge itself, where the page heading sits.
+ */
+function washDepth(wash: Wash, { width, height }: { width: number; height: number }): number {
+  const centre = { x: wash.centre.x * width, y: wash.centre.y * height };
+  const nearest = {
+    x: Math.min(Math.max(centre.x, 0), width),
+    y: Math.min(Math.max(centre.y, 0), height),
+  };
+  const from = Math.hypot(
+    (nearest.x - centre.x) / wash.radius.x,
+    (nearest.y - centre.y) / wash.radius.y,
+  );
+
+  return Math.max(0, 1 - from / wash.fade);
+}
+
+/** The washes as surfaces, each at the deepest it gets at any window size. */
+function backgroundWashes(block: string): Colour[] {
+  return pageWashes(block).map((wash) => ({
+    rgb: wash.colour.rgb,
+    alpha: wash.colour.alpha * Math.max(...WINDOW_SIZES.map((size) => washDepth(wash, size))),
+  }));
 }
 
 /** Token names a theme block defines. */
@@ -857,6 +931,42 @@ describe('what the scans read', () => {
     // but the slashes in it are not a comment and the next line is not eaten.
     expect(inlineColours('Tint.tsx', source)).toEqual(['Tint.tsx:1  #fff', "Tint.tsx:2  color: 'red'"]);
   });
+
+  it('refuses a root block it cannot name', () => {
+    // In a selector list the theme would never be read; twice over, two blocks
+    // would be measured under one title.
+    expect(() => themesIn(':root, :root[data-theme="sepia"] {\n  --bg: #fff8ee;\n}')).toThrow(
+      /root blocks/,
+    );
+    expect(() => themesIn(':root {\n  --bg: #000000;\n}\n:root {\n  --bg: #111111;\n}')).toThrow(
+      /two theme blocks/,
+    );
+  });
+
+  it('reads a page wash as a colour fading to transparent', () => {
+    const block =
+      '--bg-image: radial-gradient(1100px 650px at 10% -10%, rgba(26, 111, 212, 0.12), transparent 60%);';
+
+    const [wash] = backgroundWashes(block);
+    expect(wash.rgb).toEqual([26, 111, 212]);
+    // Deeper than nothing, and shallower than the declared stop, which is only
+    // reached off-canvas.
+    expect(wash.alpha).toBeGreaterThan(0);
+    expect(wash.alpha).toBeLessThanOrEqual(0.12);
+  });
+
+  it('refuses a page wash it cannot read whole', () => {
+    const swapped =
+      '--bg-image: radial-gradient(1100px 650px at 10% -10%, transparent 60%, rgba(26, 111, 212, 0.12));';
+    const third =
+      '--bg-image: radial-gradient(1100px 650px at 10% -10%, rgba(26, 111, 212, 0.12), transparent 60%, rgba(0, 0, 0, 0.2));';
+    const hex = '--bg-image: radial-gradient(1100px 650px at 10% -10%, #1a6fd4, transparent 60%);';
+
+    // Each would otherwise leave a wash out of the measurement without a word.
+    for (const block of [swapped, third, hex]) {
+      expect(() => backgroundWashes(block), block).toThrow(/radial washes/);
+    }
+  });
 });
 
 /** The surfaces the pairs are measured on, each translucent one composited. */
@@ -972,6 +1082,21 @@ describe('the window the page gradient is measured in', () => {
     // The minimum is measured with the frame taken off, so it has to come out
     // below the opened size; a parse that read the wrong numbers would not.
     expect(smallest.height).toBeLessThan(opened.height);
+  });
+
+  it('finds no wash deeper than in the smallest window', () => {
+    // This is what makes the two sizes the whole range: a window bigger than the
+    // smallest is never worse, so enumerating larger ones would measure nothing.
+    const [smallest, opened] = WINDOW_SIZES;
+
+    for (const { theme, block } of THEMES) {
+      for (const wash of pageWashes(block)) {
+        expect(
+          washDepth(wash, opened),
+          `${theme}: a wash is deeper in the opened window than in the smallest`,
+        ).toBeLessThanOrEqual(washDepth(wash, smallest));
+      }
+    }
   });
 });
 
