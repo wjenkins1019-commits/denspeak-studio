@@ -21,11 +21,7 @@ function tokenBlock(selector: string): string {
   return css.slice(open + 1, close);
 }
 
-function token(block: string, name: string): Colour {
-  const match = block.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
-  if (!match) throw new Error(`missing ${name}`);
-
-  const value = match[1].trim();
+function colour(value: string): Colour {
   const hex = value.match(/^#([0-9a-f]{6})$/i);
   if (hex) {
     const digits = hex[1];
@@ -44,7 +40,13 @@ function token(block: string, name: string): Colour {
     };
   }
 
-  throw new Error(`cannot read ${name}: ${value}`);
+  throw new Error(`cannot read colour: ${value}`);
+}
+
+function token(block: string, name: string): Colour {
+  const match = block.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
+  if (!match) throw new Error(`missing ${name}`);
+  return colour(match[1].trim());
 }
 
 /** `fg` laid over `bg`, so a translucent surface is measured as it is painted. */
@@ -90,6 +92,82 @@ const THEMES = [
   { theme: 'dark', selector: ':root {' },
   { theme: 'light', selector: ":root[data-theme='light'] {" },
 ];
+
+type Literal = { selector: string; property: string; value: string };
+
+/** Every rule that paints text, or the surface under it, with a raw colour. */
+function literals(): Literal[] {
+  // Comments carry prose about colours, so they are stripped before the scan.
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const found: Literal[] = [];
+  const rule = /([^{}]+)\{([^{}]*)\}/g;
+
+  for (const match of source.matchAll(rule)) {
+    const selector = match[1].replace(/\s+/g, ' ').trim();
+    for (const declaration of match[2].split(';')) {
+      const at = declaration.indexOf(':');
+      if (at === -1) continue;
+      const property = declaration.slice(0, at).trim().toLowerCase();
+      if (property !== 'color' && property !== 'fill' && property !== '-webkit-text-fill-color') continue;
+      const value = declaration.slice(at + 1).trim();
+      // A token, or a keyword that borrows the surrounding colour: not a literal.
+      if (/^(var\(|currentColor|inherit|transparent|none|unset)/i.test(value)) continue;
+      found.push({ selector, property, value });
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Raw colours a rule is still allowed to paint itself with, each with the token
+ * drawn on top of it so the pair stays under the same 4.5:1 bar. Nothing else
+ * should be on this list: text belongs to the tokens.
+ */
+const ALLOWED_LITERALS: Array<{
+  selector: string;
+  property: string;
+  value: string;
+  theme: 'dark' | 'light';
+  text: string;
+}> = [
+  {
+    // The EQ graph's readout chip: a literal white in the light theme, with the
+    // value label drawn on top of it in --text.
+    selector: ":root[data-theme='light'] .eq-graph .eq-readout rect",
+    property: 'fill',
+    value: '#ffffff',
+    theme: 'light',
+    text: '--text',
+  },
+];
+
+describe('text painted with a raw colour', () => {
+  it('uses tokens for every text colour and surface', () => {
+    const unexpected = literals().filter(
+      (literal) =>
+        !ALLOWED_LITERALS.some(
+          (allowed) =>
+            allowed.selector === literal.selector &&
+            allowed.property === literal.property &&
+            allowed.value.toLowerCase() === literal.value.toLowerCase(),
+        ),
+    );
+
+    expect(unexpected.map((literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`)).toEqual([]);
+  });
+
+  it('keeps each allowlisted surface readable under its text', () => {
+    for (const allowed of ALLOWED_LITERALS) {
+      const block = tokenBlock(allowed.theme === 'light' ? ":root[data-theme='light'] {" : ':root {');
+      const ratio = contrast(token(block, allowed.text), colour(allowed.value));
+      expect(
+        ratio,
+        `${allowed.text} on ${allowed.value} (${allowed.selector}) is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
 
 describe.each(THEMES)('$theme theme', ({ selector }) => {
   const block = tokenBlock(selector);
