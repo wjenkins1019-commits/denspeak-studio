@@ -71,7 +71,9 @@
   --danger-bg: rgba(179, 34, 60, 0.08);
   --danger-border: rgba(179, 34, 60, 0.32);
   --danger-text: #8c1830;
-  --primary-text: #04162c;
+  /* The light accent fill is deep enough that the dark navy of the dark theme
+     reaches only 3.4:1 on it; white is 4.9-5.4:1 across the gradient. */
+  --primary-text: #ffffff;
   --shadow-card: 0 18px 44px rgba(23, 45, 80, 0.12);
   --shadow-brand: 0 8px 20px rgba(23, 45, 80, 0.16);
   --bg-image:
@@ -283,11 +285,6 @@ small {
 .nav-count:focus-visible {
   outline: 2px solid var(--accent-2);
   outline-offset: 2px;
-}
-
-/* Light UI darkens the accent, so the count keeps white text to stay legible. */
-:root[data-theme='light'] .nav-count {
-  color: #ffffff;
 }
 
 /* Spoken, not drawn: what the rail's count means. */
