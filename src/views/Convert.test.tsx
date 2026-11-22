@@ -153,7 +153,11 @@ describe('Convert hand-off', () => {
 
     // A plain render: one subscription, so one claim at a time.
     const { unmount } = render(<Convert />);
-    // The visit's own claim has to land before there is a Next take to press.
+    // The visit's own claim has to land before there is a Next take to press:
+    // wait for its delete to be under way, then let it through. The claim
+    // waits for the sends' puts first, so the delete is not there in the
+    // same tick as the render.
+    await waitFor(() => expect(releases.length).toBe(1));
     await act(async () => {
       releases.shift()?.();
     });
@@ -164,6 +168,7 @@ describe('Convert hand-off', () => {
     });
     // The claim is in flight: the second take is out of the queue already,
     // its row still waiting on the delete.
+    await waitFor(() => expect(releases.length).toBe(1));
     expect(pendingCount('convert')).toBe(0);
 
     // Navigating away unmounts the view before that delete lands.

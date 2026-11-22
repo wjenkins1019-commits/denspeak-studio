@@ -145,6 +145,16 @@ function write(work: () => Promise<void>): void {
 }
 
 /**
+ * Delete a row only after earlier storage work has landed. Sends queue their
+ * puts through `writes`, so a delete issued straight after a send must wait
+ * for that chain: deleting first and putting after leaves an orphan row the
+ * next run hydrates back — the take delivered twice.
+ */
+function removeStored(key: string): Promise<void> {
+  return writes.then(() => store.remove(key));
+}
+
+/**
  * Delete stored rows that are stale or over a section's limit, newest first so
  * the newest takes are the ones that survive. Storage only: the queues this
  * session holds are untouched.
@@ -373,7 +383,7 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
     // A delete that never answers is no better than one that refuses: the row
     // is still on disk, so the take stays queued and the section has to say so
     // rather than sit silent with the take caught between queued and shown.
-    await withinTimeout(store.remove(entry.key), clearTimeoutMs);
+    await withinTimeout(removeStored(entry.key), clearTimeoutMs);
     return { status: 'taken', entry };
   } catch {
     restoreQueued(target, entry);
@@ -518,7 +528,7 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
   try {
     // A delete that never answers counts as one that refused: the row is still
     // there, so the take stays queued and the panel says why it is still listed.
-    await withinTimeout(store.remove(key), clearTimeoutMs);
+    await withinTimeout(removeStored(key), clearTimeoutMs);
   } catch {
     return false;
   }
@@ -566,7 +576,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
     }
 
     try {
-      await withinTimeout(store.remove(key), left);
+      await withinTimeout(removeStored(key), left);
       consumed.add(key);
       gone += 1;
     } catch {

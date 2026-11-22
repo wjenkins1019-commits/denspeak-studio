@@ -356,6 +356,34 @@ describe('durable queue', () => {
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
   });
 
+  it('does not orphan a row when a take is claimed before its put lands', async () => {
+    // Hold the send's put so the claim's delete wins the race outright.
+    let releasePut = () => {};
+    const put = store.put.bind(store);
+    store.put = (record: HandoffRecord) =>
+      new Promise<void>((resolve) => {
+        releasePut = () => {
+          void put(record).then(() => resolve());
+        };
+      });
+
+    sendHandoff('convert', item);
+    const taken = takeHandoff('convert');
+    // Let the in-flight delete win against the queued put.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releasePut();
+    expect(await taken).toEqual(item);
+    store.put = put;
+
+    // No orphan row survived the race...
+    expect(store.rows.size).toBe(0);
+    // ...so a reload never delivers it twice.
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
   it('reports a take that would not open, and opens it on another try', async () => {
     sendHandoff('convert', item);
     await vi.waitFor(() => expect(store.rows.size).toBe(1));
