@@ -18,6 +18,7 @@ import {
   queuedTakes,
   discardHandoff,
   discardHandoffQueue,
+  flushHandoffWrites,
   HANDOFF_MAX_AGE_MS,
   HANDOFF_MAX_STORED,
   HANDOFF_TARGETS,
@@ -260,7 +261,8 @@ describe('durable queue', () => {
 
   it('brings back a take that was still waiting when the app reloaded', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     // A reload: the in-memory queue is gone, the stored take is not.
     clearHandoff();
@@ -271,17 +273,19 @@ describe('durable queue', () => {
     stop();
 
     expect(seen[0]).toEqual(item);
-    // Taken once, so the next load starts empty instead of replaying it.
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    // Taken once, so the next load starts empty instead of replaying it: the
+    // take is delivered only after its row is gone.
+    expect(store.rows.size).toBe(0);
   });
 
   it('does not bring back a take that was discarded', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const [queued] = queuedTakes('convert');
     expect(await discardHandoff('convert', queued.key)).toBe(true);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
 
     // A reload starts with nothing, not with the discarded audio.
     clearHandoff();
@@ -296,10 +300,11 @@ describe('durable queue', () => {
   it('does not bring back a queue that was cleared', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
-    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(2);
 
     expect(await discardHandoffQueue('convert')).toBe(2);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
 
     clearHandoff();
     await hydrateHandoff();
@@ -309,7 +314,8 @@ describe('durable queue', () => {
 
   it('keeps a discarded take queued when its row will not go', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
     const [queued] = queuedTakes('convert');
 
     const remove = store.remove.bind(store);
@@ -325,7 +331,7 @@ describe('durable queue', () => {
     store.remove = remove;
     expect(await discardHandoff('convert', queued.key)).toBe(true);
     expect(pendingCount('convert')).toBe(0);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
 
     // Nothing left for a reload to bring back.
     clearHandoff();
@@ -336,7 +342,8 @@ describe('durable queue', () => {
   it('clears only the takes whose rows went', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
-    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(2);
 
     const [first] = queuedTakes('convert');
     const remove = store.remove.bind(store);
@@ -353,7 +360,7 @@ describe('durable queue', () => {
 
     store.remove = remove;
     expect(await discardHandoffQueue('convert')).toBe(1);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
   });
 
   it('does not orphan a row when a take is claimed before its put lands', async () => {
@@ -404,7 +411,8 @@ describe('durable queue', () => {
       });
 
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const taken = takeHandoff('convert');
     // The delete is under way but has not landed: the row is still there
@@ -433,7 +441,8 @@ describe('durable queue', () => {
 
   it('reports a take that would not open, and opens it on another try', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const remove = store.remove.bind(store);
     store.remove = vi.fn(async () => {
@@ -449,12 +458,13 @@ describe('durable queue', () => {
     // lands puts the take back with it instead of losing it.
     expect(await claimHandoff('convert')).toMatchObject({ status: 'taken', item });
     expect(await claimHandoff('convert')).toEqual({ status: 'empty' });
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
   });
 
   it('tells a section its take failed to open, and not once it opens', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const remove = store.remove.bind(store);
     store.remove = vi.fn(async () => {
@@ -491,10 +501,12 @@ describe('durable queue', () => {
 
   it('does not add a stored row for a take that is still queued in memory', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
-    // Sending also prunes storage, which reads it back once.
-    await vi.waitFor(() => expect(store.lists).toBe(1));
+    // Sending also prunes storage, which reads it back once: the prune runs
+    // inside the queued write, so the flush covers it too.
+    expect(store.lists).toBe(1);
 
     // Another section opening reads the store back. Convert's take has only
     // been sent, not taken, so its row is still there and must be recognised
@@ -516,7 +528,8 @@ describe('durable queue', () => {
   it('hands stored takes over oldest first, one per visit', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
-    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(2);
 
     clearHandoff();
     const names: string[] = [];
@@ -540,13 +553,16 @@ describe('durable queue', () => {
 
   it('drops a stored take nobody opened within the week', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     for (const row of store.rows.values()) row.at = Date.now() - HANDOFF_MAX_AGE_MS - 1000;
 
     clearHandoff();
     const seen: HandoffItem[] = [];
     const stop = subscribeHandoff('convert', (handed) => seen.push(handed));
+    // Stays wall-clock: this prune runs unobserved inside hydration, after
+    // the read, so no queued write covers it.
     await vi.waitFor(() => expect(store.rows.size).toBe(0));
     stop();
 
@@ -556,7 +572,8 @@ describe('durable queue', () => {
 
   it('waits for the delete before handing the take over', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const remove = store.remove.bind(store);
     const releases: Array<() => void> = [];
@@ -588,7 +605,8 @@ describe('durable queue', () => {
 
   it('keeps a take queued when its stored row cannot be deleted', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const remove = store.remove.bind(store);
     store.remove = vi.fn(async () => {
@@ -603,12 +621,13 @@ describe('durable queue', () => {
     // The take was never applied, so a working delete can still hand it over.
     store.remove = remove;
     expect(await takeHandoff('convert')).toEqual(item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    expect(store.rows.size).toBe(0);
   });
 
   it('does not show a take whose row survived a failed delete', async () => {
     sendHandoff('convert', item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
 
     const remove = store.remove.bind(store);
     store.remove = vi.fn(async () => {
@@ -632,14 +651,16 @@ describe('durable queue', () => {
     stopNext();
 
     expect(nextRun[0]).toEqual(item);
-    await vi.waitFor(() => expect(store.rows.size).toBe(0));
+    // Delivered only after the row is gone.
+    expect(store.rows.size).toBe(0);
   });
 
   it('keeps only a section’s newest takes on disk', async () => {
     for (let index = 0; index <= HANDOFF_MAX_STORED + 2; index += 1) {
       sendHandoff('convert', { ...item, name: `Take ${index}` });
     }
-    await vi.waitFor(() => expect(store.rows.size).toBe(HANDOFF_MAX_STORED));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(HANDOFF_MAX_STORED);
 
     const names = [...store.rows.values()]
       .sort((a, b) => a.at - b.at)
@@ -675,7 +696,8 @@ describe('durable queue', () => {
   it('counts takes an earlier run left before that section is opened', async () => {
     sendHandoff('convert', item);
     sendHandoff('convert', { ...item, name: 'Second take' });
-    await vi.waitFor(() => expect(store.rows.size).toBe(2));
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(2);
 
     // A reload: the queues are empty until the store is asked.
     clearHandoff();

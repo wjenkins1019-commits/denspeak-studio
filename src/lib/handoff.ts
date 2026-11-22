@@ -145,6 +145,17 @@ function write(work: () => Promise<void>): void {
 }
 
 /**
+ * Test-only: wait until the storage work queued so far has landed. Sends and
+ * put-backs write through `writes`, so after this their rows are on disk and
+ * any prune they triggered has run. Deletes are awaited by their own callers
+ * instead, so an in-flight delete is not covered — wait for its take.
+ */
+export function flushHandoffWrites(): Promise<void> {
+  write(() => Promise.resolve());
+  return writes;
+}
+
+/**
  * Delete a row only after earlier storage work has landed. Sends queue their
  * puts through `writes`, so a delete issued straight after a send must wait
  * for that chain: deleting first and putting after leaves an orphan row the
