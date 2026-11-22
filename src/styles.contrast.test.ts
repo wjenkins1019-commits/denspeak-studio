@@ -344,12 +344,11 @@ function withoutComments(source: string): string {
 /** Raw colours a component hands to an element, as `label:line  fragment`. */
 function inlineColours(label: string, source: string): string[] {
   const text = withoutComments(source);
-  const offences: string[] = [];
+  const offences: Array<{ index: number; fragment: string }> = [];
   const reported = new Set<number>();
   const note = (index: number, fragment: string) => {
     reported.add(index);
-    const line = text.slice(0, index).split('\n').length;
-    offences.push(`${label}:${line}  ${fragment.trim()}`);
+    offences.push({ index, fragment: fragment.trim() });
   };
 
   /** A colour named inside an expression: `hot ? 'red' : undefined`. */
@@ -398,7 +397,14 @@ function inlineColours(label: string, source: string): string[] {
     note(index, match[0]);
   }
 
-  return offences;
+  // The checks run property by property, so their findings are sorted back into
+  // source order: a failure then reads down the file instead of jumping around.
+  return offences
+    .sort((a, b) => a.index - b.index)
+    .map(({ index, fragment }) => {
+      const line = text.slice(0, index).split('\n').length;
+      return `${label}:${line}  ${fragment}`;
+    });
 }
 
 /**
@@ -460,9 +466,9 @@ describe('what the scans read', () => {
     ].join('\n');
 
     expect(inlineColours('Card.tsx', source)).toEqual([
-      'Card.tsx:3  #ff0000',
       "Card.tsx:3  color: 'red'",
       "Card.tsx:3  background: '#ff0000'",
+      'Card.tsx:3  #ff0000',
     ]);
   });
 
