@@ -384,6 +384,53 @@ describe('durable queue', () => {
     expect(await takeHandoff('convert')).toBeNull();
   });
 
+  it('deletes the row before handing the take over, so a take is never replayed', async () => {
+    // The crash tradeoff, pinned. The loss window runs from the row's delete
+    // resolving to the caller applying the take, with no awaits in between
+    // on any claim path — microtasks inside one task, unobservable except by
+    // killing the process inside it. A crash there loses that visit's take.
+    // The alternative (hand over first, delete after) would replay an
+    // already-applied take on every failed delete — the common, observable
+    // case a hung store produces — and unshowing it would need a rollback in
+    // every section. Loss on crash, never replay: this pins the ordering
+    // that choice rests on.
+    let releaseRemove: (() => void) | undefined;
+    const remove = store.remove.bind(store);
+    store.remove = (key: string) =>
+      new Promise<void>((resolve) => {
+        releaseRemove = () => {
+          void remove(key).then(() => resolve());
+        };
+      });
+
+    sendHandoff('convert', item);
+    await vi.waitFor(() => expect(store.rows.size).toBe(1));
+
+    const taken = takeHandoff('convert');
+    // The delete is under way but has not landed: the row is still there
+    // and the take is not handed over yet.
+    await vi.waitFor(() => expect(releaseRemove).toBeDefined());
+    let settled: HandoffItem | null | undefined;
+    void taken.then((value) => {
+      settled = value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBeUndefined();
+    expect(store.rows.size).toBe(1);
+
+    releaseRemove!();
+    expect(await taken).toEqual(item);
+    store.remove = remove;
+
+    // The row went before the handover: from here on a crash loses the take
+    // rather than replaying it, and a reload starts empty.
+    expect(store.rows.size).toBe(0);
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
   it('reports a take that would not open, and opens it on another try', async () => {
     sendHandoff('convert', item);
     await vi.waitFor(() => expect(store.rows.size).toBe(1));
