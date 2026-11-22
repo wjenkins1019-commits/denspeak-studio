@@ -160,12 +160,105 @@ function sourceFiles(dir: string): string[] {
 /**
  * Comments are prose, so they are blanked out before a component is scanned —
  * but their newlines are kept, so a reported line still points at the code.
- * `//` is left alone after a colon, which is how `https://` survives.
+ *
+ * Strings are followed rather than regex-matched, so a `//` in `'a//b'` or in a
+ * template literal is text, not a comment, and an escaped quote does not end the
+ * string early. `${…}` re-enters code so a comment inside an interpolation is
+ * still stripped. Regex literals are not tracked: a `/…/` containing `//` would
+ * be read as a comment, which no source under src does today.
  */
 function withoutComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (comment, lead: string) => lead + ' '.repeat(comment.length - lead.length));
+  type Frame = { kind: 'code'; braces: number } | { kind: 'template' };
+  const stack: Frame[] = [{ kind: 'code', braces: 0 }];
+  let quote: "'" | '"' | null = null;
+  let out = '';
+  let i = 0;
+
+  while (i < source.length) {
+    const frame = stack[stack.length - 1];
+    const char = source[i];
+    const next = source[i + 1];
+
+    if (frame.kind === 'template') {
+      if (char === '\\') {
+        out += char + (next ?? '');
+        i += 2;
+      } else if (char === '`') {
+        stack.pop();
+        out += char;
+        i += 1;
+      } else if (char === '$' && next === '{') {
+        stack.push({ kind: 'code', braces: 0 });
+        out += '${';
+        i += 2;
+      } else {
+        out += char;
+        i += 1;
+      }
+      continue;
+    }
+
+    if (quote) {
+      out += char;
+      if (char === '\\') {
+        out += next ?? '';
+        i += 2;
+      } else {
+        if (char === quote) quote = null;
+        i += 1;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      out += char;
+      i += 1;
+      continue;
+    }
+
+    if (char === '`') {
+      stack.push({ kind: 'template' });
+      out += char;
+      i += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      out += '  ';
+      i += 2;
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        out += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < source.length) {
+        out += '  ';
+        i += 2;
+      }
+      continue;
+    }
+
+    if (char === '{') {
+      frame.braces += 1;
+    } else if (char === '}') {
+      // A brace that closes an interpolation hands the scan back to the string.
+      if (frame.braces > 0) frame.braces -= 1;
+      else if (stack.length > 1) stack.pop();
+    }
+
+    out += char;
+    i += 1;
+  }
+
+  return out;
 }
 
 /** Raw colours a component hands to an element, as `label:line  fragment`. */
@@ -267,6 +360,30 @@ describe('what the scans read', () => {
     const source = "const url = 'https://example.test/a'; const tint = { color: 'red' };";
 
     expect(inlineColours('Link.tsx', source)).toEqual(["Link.tsx:1  color: 'red'"]);
+  });
+
+  it('does not read a // inside a string as the start of a comment', () => {
+    expect(inlineColours('Path.tsx', "const p = 'a//b'; const tint = { color: 'red' };")).toEqual([
+      "Path.tsx:1  color: 'red'",
+    ]);
+    expect(inlineColours('Path.tsx', 'const p = "x // y"; const tint = { fill: \'red\' };')).toEqual([
+      "Path.tsx:1  fill: 'red'",
+    ]);
+    // An escaped quote does not end the string early, so the // after it is text.
+    expect(inlineColours('Path.tsx', "const p = 'it\\'s // fine'; const tint = { fill: 'red' };")).toEqual([
+      "Path.tsx:1  fill: 'red'",
+    ]);
+  });
+
+  it('does not read a // inside a template literal as the start of a comment', () => {
+    const source = [
+      'const fill = `/// ${1} #fff`;',
+      "const tint = { color: 'red' };",
+    ].join('\n');
+
+    // The template is still scanned — a colour written into one is a colour —
+    // but the slashes in it are not a comment and the next line is not eaten.
+    expect(inlineColours('Tint.tsx', source)).toEqual(['Tint.tsx:1  #fff', "Tint.tsx:2  color: 'red'"]);
   });
 });
 
