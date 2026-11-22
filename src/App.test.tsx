@@ -405,6 +405,54 @@ describe('hand-off navigation', () => {
     expect(document.activeElement).toBe(heading);
   });
 
+  it('keeps every row when the store refuses a clear, and leaves focus where the reader has it', async () => {
+    const store = new StubbornStore();
+    setHandoffStore(store);
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    await act(async () => {
+      sendHandoff('song', { name: 'A take', blob: new Blob(['a']), duration: 1 });
+      sendHandoff('song', { name: 'Another take', blob: new Blob(['b']), duration: 2 });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /2 takes waiting for Song/ }));
+    });
+
+    const panel = screen.getByRole('dialog', { name: 'Waiting for Song' });
+    const clear = screen.getByRole('button', { name: 'Clear all 2' });
+    clear.focus();
+    await act(async () => {
+      fireEvent.click(clear);
+    });
+
+    // Every row is still listed, because the store would not let any of them go,
+    // and the panel says so rather than looking as if it were already empty.
+    expect(panel.textContent).toContain('A take');
+    expect(panel.textContent).toContain('Another take');
+    expect(panel.textContent).toContain('Couldn’t remove 2 takes');
+    expect(store.rows.size).toBe(2);
+    // Nothing was thrown away, so nothing was taken from focus either: it stays
+    // on the button that was pressed, which is still there to press again.
+    expect(document.activeElement).toBe(clear);
+
+    // The refused request is spent, not banked: the queue filling up again is no
+    // reason to pull focus back to a control the reader has since left.
+    const heading = screen.getByRole('heading', { level: 2, name: 'Waiting for Song' });
+    heading.focus();
+    await act(async () => {
+      sendHandoff('song', { name: 'Late take', blob: new Blob(['c']), duration: 3 });
+    });
+
+    expect(panel.textContent).toContain('Late take');
+    expect(document.activeElement).toBe(heading);
+  });
+
   it('takes the notice\'s way back to the section the take came from', async () => {
     render(
       <StrictMode>
