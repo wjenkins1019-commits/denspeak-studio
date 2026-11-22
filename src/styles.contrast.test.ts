@@ -121,6 +121,18 @@ const THEMES = [...css.matchAll(/^(:root(?:\[[^\]]*\])?)\s*\{/gm)].map((match) =
 /** Text tokens the app paints straight on the page rather than on a card. */
 const PAGE_TEXT = [...new Set(TEXT_PAIRS.filter(([, bg]) => bg === '--bg' || bg === '--bg-2').map(([fg]) => fg))];
 
+/**
+ * Text the rail paints, with whether the active item's tint is under it: the
+ * active item swaps its label to --text and its hint to --accent-2, so the
+ * quiet --dim and --muted only ever sit on the rail wash itself.
+ */
+const RAIL_TEXT: Array<[fg: string, onActiveTint: boolean]> = [
+  ['--text', true],
+  ['--accent-2', true],
+  ['--muted', false],
+  ['--dim', false],
+];
+
 /** The window the page gradient is judged against. */
 const WINDOW = { width: 1280, height: 820 };
 
@@ -130,6 +142,11 @@ const WINDOW = { width: 1280, height: 820 };
  * window's corners, taken at the sizes the gradient declares, are as strong as
  * it paints where text can sit.
  */
+/** The colour stops a gradient token declares, in source order. */
+function gradientStops(block: string, name: string): Colour[] {
+  return [...tokenText(block, name).matchAll(/#[0-9a-f]{6}\b|rgba?\([^)]+\)/gi)].map((match) => colour(match[0]));
+}
+
 function backgroundWashes(block: string): Colour[] {
   const value = tokenText(block, '--bg-image');
   const washes: Colour[] = [];
@@ -160,8 +177,8 @@ const tokensIn = (block: string) => [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].m
 
 /**
  * Tokens that paint no colour of their own: lines and borders, shadows and
- * glows, the page's background image, geometry, and the rail's translucent
- * washes, which read as --bg beneath the labels on them.
+ * glows, the page's background image and geometry. The rail's washes are not
+ * here — their stops are measured under the rail's text.
  */
 const NOT_TEXT = new Set([
   '--radius',
@@ -173,8 +190,6 @@ const NOT_TEXT = new Set([
   '--glass-inner',
   '--glow',
   '--bg-image',
-  '--rail-bg',
-  '--active-nav',
   '--shadow-card',
   '--shadow-brand',
 ]);
@@ -186,6 +201,9 @@ const MEASURED = new Set<string>([
   ...RING_SURFACES,
   '--primary-text',
   '--hint-bg',
+  // Measured as the gradient the rail and its active item paint with.
+  '--rail-bg',
+  '--active-nav',
 ]);
 
 /**
@@ -821,6 +839,37 @@ describe.each(THEMES)('$theme theme', ({ block }) => {
     for (const surface of RING_SURFACES) {
       const ratio = contrast(token(block, '--accent-2'), token(block, surface));
       expect(ratio, `--accent-2 on ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('keeps rail text readable over the rail wash and the page beneath it', () => {
+    // The rail is a translucent white wash, and the page gradient's washes show
+    // through it, so rail labels sit on a lighter surface than flat --bg.
+    const railStops = gradientStops(block, '--rail-bg');
+    expect(railStops.length, '--rail-bg declares no colour stops').toBeGreaterThan(0);
+
+    const pages = [
+      ...RING_SURFACES.map((surface) => token(block, surface)),
+      ...RING_SURFACES.flatMap((surface) =>
+        backgroundWashes(block).map((wash) => over(wash, token(block, surface))),
+      ),
+    ];
+
+    // The active nav item lays its own tint over the rail, so its labels sit
+    // two layers deep; the other rail text sits on the rail wash alone.
+    const nav = gradientStops(block, '--active-nav');
+    const onRail = railStops.map((rail) => [rail]);
+    const onActive = [...onRail, ...railStops.flatMap((rail) => nav.map((tint) => [rail, tint]))];
+
+    for (const [fg, onActiveTint] of RAIL_TEXT) {
+      for (const stack of onActiveTint ? onActive : onRail) {
+        for (const page of pages) {
+          const surface = stack.reduce((under, layer) => over(layer, under), page);
+          const ratio = contrast(token(block, fg), surface);
+          const painted = stack.map((layer) => `${layer.alpha.toFixed(3)}`).join(' over ');
+          expect(ratio, `${fg} under ${painted} on the rail is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     }
   });
 

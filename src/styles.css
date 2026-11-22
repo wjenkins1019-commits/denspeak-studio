@@ -7,7 +7,9 @@
   --danger: #ff7d92;
   --text: #eaf3ff;
   --muted: #a7bdd9;
-  --dim: #7895b8;
+  /* Light enough to clear 4.5:1 on the rail, where the page gradient's wash
+     shows through the rail's own translucent white. */
+  --dim: #86a0bf;
   --line: rgba(148, 197, 255, 0.16);
   --line-soft: rgba(148, 197, 255, 0.1);
   --line-strong: rgba(148, 197, 255, 0.3);
@@ -48,8 +50,9 @@
   --accent: #1a6fd4;
   /* Text-grade teal: clears AA on the page and on the panel, including where
      the page gradient's accent wash is strongest behind the labels nearest it,
-     and keeps a strong 4.6:1 for the focus ring. */
-  --accent-2: #0a6b8c;
+     on the rail's active item where its own tint sits under the label, and it
+     keeps a strong 4.6:1 for the focus ring. */
+  --accent-2: #0a698a;
   --warm: #925500;
   --danger: #b3223c;
   --text: #0c1a2c;
