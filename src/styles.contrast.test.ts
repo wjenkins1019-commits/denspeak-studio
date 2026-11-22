@@ -143,8 +143,88 @@ const THEMED_VALUE =
   /^(var\(--[a-z0-9-]+\)|transparent|currentColor|none|inherit|unset|undefined|url\(#|(?:linear|radial|conic)-gradient\()/i;
 
 const COLOUR_ATTR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=(["'])([^"']*)\2/g;
+const COLOUR_ATTR_EXPR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=\{/g;
 const COLOUR_PROP =
-  /\b(color|backgroundColor|background|borderColor|outlineColor|textDecorationColor|fill|stroke|stopColor|floodColor|caretColor)\s*:\s*(['"])([^'"]*)\2/g;
+  /\b(color|backgroundColor|background|borderColor|outlineColor|textDecorationColor|fill|stroke|stopColor|floodColor|caretColor)\s*:\s*/g;
+const QUOTED = /(['"`])((?:[^'"`\\]|\\.)*)\1/g;
+
+/**
+ * The CSS colour keywords. A string in a colour position is only suspect if it
+ * names one of these, so `theme === 'light'` choosing between two tokens is
+ * left alone while `hot ? 'red' : …` is not.
+ */
+const NAMED_COLOURS = new Set(
+  `aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue
+  blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk
+  crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki
+  darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen
+  darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue
+  dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite
+  gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki
+  lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan
+  lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen
+  lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen
+  magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen
+  mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream
+  mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid
+  palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum
+  powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown
+  seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen
+  steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow
+  yellowgreen`
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+/**
+ * The value of a property, cut where the property ends rather than at the next
+ * quote. Brackets and strings are counted so a comma inside a call does not end
+ * it early — a depth counter, not a parser.
+ */
+function valueAt(text: string, start: number): { value: string; at: number } {
+  let depth = 0;
+  let quote: string | null = null;
+  let i = start;
+
+  while (i < text.length) {
+    const char = text[i];
+
+    if (quote) {
+      if (char === '\\') {
+        i += 2;
+        continue;
+      }
+      if (char === quote) quote = null;
+      i += 1;
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      i += 1;
+      continue;
+    }
+
+    if (char === '(' || char === '[' || char === '{') {
+      depth += 1;
+      i += 1;
+      continue;
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      if (depth === 0) break;
+      depth -= 1;
+      i += 1;
+      continue;
+    }
+
+    if ((char === ',' || char === '\n') && depth === 0) break;
+    i += 1;
+  }
+
+  const raw = text.slice(start, i);
+  return { value: raw.trim(), at: start + (raw.length - raw.trimStart().length) };
+}
 
 /** Every source module under `dir`: components and plain modules alike. */
 function sourceFiles(dir: string): string[] {
@@ -270,13 +350,39 @@ function inlineColours(label: string, source: string): string[] {
     offences.push(`${label}:${line}  ${fragment.trim()}`);
   };
 
+  /** A colour named inside an expression: `hot ? 'red' : undefined`. */
+  const flagNames = (value: string, at: number, property: string) => {
+    for (const inner of value.matchAll(QUOTED)) {
+      if (!NAMED_COLOURS.has(inner[2].trim().toLowerCase())) continue;
+      note(at + (inner.index ?? 0), `${property}: ${inner[0]}`);
+    }
+  };
+
   for (const match of text.matchAll(RAW_COLOUR)) note(match.index ?? 0, match[0]);
 
-  for (const pattern of [COLOUR_ATTR, COLOUR_PROP]) {
-    for (const match of text.matchAll(pattern)) {
-      if (THEMED_VALUE.test(match[3].trim())) continue;
-      note(match.index ?? 0, match[0]);
+  for (const match of text.matchAll(COLOUR_ATTR)) {
+    if (THEMED_VALUE.test(match[3].trim())) continue;
+    note(match.index ?? 0, match[0]);
+  }
+
+  // An attribute handed an expression instead of a string.
+  for (const match of text.matchAll(COLOUR_ATTR_EXPR)) {
+    const { value, at } = valueAt(text, (match.index ?? 0) + match[0].length);
+    flagNames(value, at, match[1]);
+  }
+
+  for (const match of text.matchAll(COLOUR_PROP)) {
+    const { value, at } = valueAt(text, (match.index ?? 0) + match[0].length);
+    const single = value.match(/^(['"])((?:[^'"\\]|\\.)*)\1$/);
+
+    // A plain string is checked whole; anything else is an expression whose
+    // strings only matter if one of them names a colour.
+    if (single) {
+      if (!THEMED_VALUE.test(single[2].trim())) note(at, `${match[1]}: ${single[0]}`);
+      continue;
     }
+
+    flagNames(value, at, match[1]);
   }
 
   return offences;
@@ -373,6 +479,31 @@ describe('what the scans read', () => {
     expect(inlineColours('Path.tsx', "const p = 'it\\'s // fine'; const tint = { fill: 'red' };")).toEqual([
       "Path.tsx:1  fill: 'red'",
     ]);
+  });
+
+  it('checks the strings inside a conditional colour', () => {
+    expect(
+      inlineColours('Meter.tsx', "const s = { background: hot ? 'var(--danger)' : undefined };"),
+    ).toEqual([]);
+    expect(
+      inlineColours('Meter.tsx', "const s = { background: hot ? 'red' : 'var(--danger)' };"),
+    ).toEqual(["Meter.tsx:1  background: 'red'"]);
+    // The same expression handed to an attribute.
+    expect(inlineColours('Meter.tsx', "<rect fill={hot ? 'white' : 'var(--line)'} />")).toEqual([
+      "Meter.tsx:1  fill: 'white'",
+    ]);
+  });
+
+  it('leaves a comparison alone when it picks between tokens', () => {
+    const source = "const s = { color: theme === 'light' ? 'var(--text)' : 'var(--text-2)' };";
+
+    expect(inlineColours('Tint.tsx', source)).toEqual([]);
+  });
+
+  it('checks a colour handed through a call', () => {
+    const source = ['const s = {', "  borderColor: pick(level, 'red', 'var(--line)'),", '};'].join('\n');
+
+    expect(inlineColours('Tint.tsx', source)).toEqual(["Tint.tsx:2  borderColor: 'red'"]);
   });
 
   it('does not read a // inside a template literal as the start of a comment', () => {
