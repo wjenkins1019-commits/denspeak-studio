@@ -580,14 +580,15 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
     // cross-tab lock. The loser drops its stale copy and tries whatever is
     // queued behind it. A take whose put has not landed yet skips the check
     // — its row missing proves nothing about another tab — and is claimed
-    // as before. A lock that will not grant falls back the same way rather
-    // than leave the take stuck.
+    // as before. A lock that will not grant reports failed and keeps the
+    // take queued for retry rather than falling back to an unlocked claim
+    // that could deliver the same row in two tabs at once.
     if (head.stored && claimLock()) {
       try {
         const outcome = await claimHydratedHead(target, head);
         if (outcome.status !== 'stolen') return outcome;
       } catch {
-        return claimHead(target);
+        return { status: 'failed' };
       }
       continue;
     }

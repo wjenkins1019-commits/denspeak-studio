@@ -538,7 +538,9 @@ describe('durable queue', () => {
     }
   });
 
-  it('does not hang a claim on a lock that never grants', async () => {
+  it('reports failed and keeps the take queued when its lock never grants', async () => {
+    // A lock timeout must not fall back to an unlocked claim that delivers:
+    // the take stays queued with its row, so a retry can deliver it once.
     const holder = navigator as unknown as { locks?: unknown };
     const previous = holder.locks;
     holder.locks = {
@@ -548,10 +550,52 @@ describe('durable queue', () => {
     try {
       sendHandoff('convert', item);
       await flushHandoffWrites();
-      expect(await takeHandoff('convert')).toEqual(item);
-      expect(store.rows.size).toBe(0);
+      expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+      expect(pendingCount('convert')).toBe(1);
+      expect(store.rows.size).toBe(1);
+      expect(await takeHandoff('convert')).toBeNull();
+      expect(pendingCount('convert')).toBe(1);
     } finally {
       setLockTimeout();
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
+  it('cannot deliver the same take twice from two timed-out claims', async () => {
+    // Two tabs stuck on the same take lock must both report failed — neither
+    // delivers — so the retry after the lock frees still hands over exactly once.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = {
+      request: () => new Promise<never>(() => {}),
+    };
+    setLockTimeout(20);
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      const [first, second] = await Promise.all([
+        claimHandoff('convert'),
+        claimHandoff('convert'),
+      ]);
+      expect(first).toEqual({ status: 'failed' });
+      expect(second).toEqual({ status: 'failed' });
+      expect(pendingCount('convert')).toBe(1);
+      expect(store.rows.size).toBe(1);
+    } finally {
+      setLockTimeout();
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+    // The lock frees: the queued retry delivers exactly once.
+    holder.locks = {
+      request: (_name: string, work: () => Promise<unknown>) => work(),
+    };
+    try {
+      expect(await takeHandoff('convert')).toEqual(item);
+      expect(store.rows.size).toBe(0);
+      expect(await takeHandoff('convert')).toBeNull();
+    } finally {
       if (previous === undefined) delete holder.locks;
       else holder.locks = previous;
     }
