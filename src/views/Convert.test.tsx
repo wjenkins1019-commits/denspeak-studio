@@ -121,6 +121,60 @@ describe('Convert hand-off', () => {
     expect(screen.queryByText(/more waiting/)).toBeNull();
   });
 
+  it('queues a take sent while the visit is still claiming, in order', async () => {
+    const releases: Array<() => void> = [];
+    const rows = new Map<string, HandoffRecord>();
+    let gatedRemoves = 1;
+    setHandoffStore({
+      async list(): Promise<HandoffRecord[]> {
+        return [...rows.values()];
+      },
+      async put(record: HandoffRecord): Promise<void> {
+        rows.set(record.key, record);
+      },
+      remove(key: string): Promise<void> {
+        if (gatedRemoves > 0) {
+          gatedRemoves -= 1;
+          return new Promise<void>((resolve) => {
+            releases.push(() => {
+              rows.delete(key);
+              resolve();
+            });
+          });
+        }
+        rows.delete(key);
+        return Promise.resolve();
+      },
+    });
+    sendHandoff('convert', { name: 'First take', blob: new Blob(['a']) });
+
+    // A plain render: one subscription, so one claim at a time.
+    render(<Convert />);
+    // The visit's claim is under way: its delete has started but not landed.
+    await waitFor(() => expect(releases.length).toBe(1));
+
+    // The second take is sent while the section is still mounting.
+    act(() => {
+      sendHandoff('convert', { name: 'Second take', blob: new Blob(['b']) });
+    });
+    // Not handed over the claim: it waits behind it, oldest first.
+    expect(pendingCount('convert')).toBe(1);
+    expect(screen.queryByText(/Arrived from another section/)).toBeNull();
+
+    await act(async () => {
+      releases.shift()?.();
+    });
+    expect(await screen.findByText(/Arrived from another section: First take/)).toBeTruthy();
+    expect(screen.getByText(/1 more waiting/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Next take' }));
+    });
+    expect(await screen.findByText(/Arrived from another section: Second take/)).toBeTruthy();
+    expect(screen.queryByText(/more waiting/)).toBeNull();
+    await waitFor(() => expect(rows.size).toBe(0));
+  });
+
   it('puts back a Next-take claim when the view is gone before the delete lands', async () => {
     // The first two deletes wait for the test; later ones go through, so a
     // later visit can take what is put back.

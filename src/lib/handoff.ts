@@ -240,11 +240,22 @@ function hydrate(): Promise<void> {
  */
 const open = new Map<HandoffTarget, Set<Listener>>();
 
+/**
+ * Targets with a take currently being claimed. A send to one of them waits
+ * behind the claim instead of being handed over it: the claim resolves into
+ * an arrival that would otherwise replace — and lose — the direct one, or be
+ * replaced by it out of order.
+ */
+const claimingTargets = new Map<HandoffTarget, number>();
+
 /** Queue a take for `target`, or hand it straight to that section if it is open. */
 export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   const listeners = open.get(target);
 
-  if (listeners && listeners.size > 0) {
+  // Direct only when nothing is being claimed: a send that lands while the
+  // visit's take is still being deleted would be replaced by its arrival out
+  // of order, so it queues behind the claim instead.
+  if (listeners && listeners.size > 0 && !claimingTargets.has(target)) {
     for (const listener of [...listeners]) listener(item);
     return;
   }
@@ -379,6 +390,7 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
   const entry = claimQueued(target);
   if (!entry) return { status: 'empty' };
 
+  claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
   try {
     // A delete that never answers is no better than one that refuses: the row
     // is still on disk, so the take stays queued and the section has to say so
@@ -388,6 +400,10 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
   } catch {
     restoreQueued(target, entry);
     return { status: 'failed' };
+  } finally {
+    const left = (claimingTargets.get(target) ?? 0) - 1;
+    if (left <= 0) claimingTargets.delete(target);
+    else claimingTargets.set(target, left);
   }
 }
 
@@ -636,6 +652,7 @@ export async function takeHandoff(target: HandoffTarget): Promise<HandoffItem | 
 export function clearHandoff(): void {
   pending.clear();
   consumed.clear();
+  claimingTargets.clear();
   hydration = null;
   writes = Promise.resolve();
   queuesChanged();
