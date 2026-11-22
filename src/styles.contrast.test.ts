@@ -103,6 +103,26 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ['--text', '--active-strong'],
 ];
 
+/**
+ * UI colours that carry no text, where WCAG 1.4.11 asks for 3:1: the accent as
+ * a fill, the sliders' accent-coloured track and thumb, the EQ curve's gradient,
+ * and the level meter's hot bar.
+ */
+const UI_PAIRS: Array<[string, string]> = [
+  // The accent as a fill: the primary button's deep end and the rail count.
+  ['--accent', '--bg-2'],
+  // `input[type='range']` takes its colour from the accent and sits on a card.
+  ['--accent', '--panel'],
+  // The curve is the accent gradient drawn on the graph's own background, which
+  // runs from --surface to --surface-soft.
+  ['--accent', '--surface'],
+  ['--accent', '--surface-soft'],
+  ['--accent-2', '--surface'],
+  ['--accent-2', '--surface-soft'],
+  // The level meter fills with the danger colour when the input is hot.
+  ['--danger', '--panel'],
+];
+
 /** Ends of the fill the primary button and the rail count are painted with. */
 const ACCENT_FILLS = ['--accent-2', '--accent'];
 
@@ -840,6 +860,13 @@ describe.each(THEMES)('$theme theme', ({ block }) => {
       const ratio = contrast(token(block, '--accent-2'), token(block, surface));
       expect(ratio, `--accent-2 on ${surface} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
     }
+  });
+
+  it.each(UI_PAIRS)('keeps the %s UI colour visible on %s', (fgToken, bgToken) => {
+    // Non-text UI is held to 3:1, not 4.5:1: these are shapes and edges, and a
+    // token lightened for a fill still has to stay visible against what it draws on.
+    const ratio = contrast(token(block, fgToken), surfaces[bgToken]);
+    expect(ratio, `${fgToken} on ${bgToken} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
   });
 
   it('keeps rail text readable over the rail wash and the page beneath it', () => {
