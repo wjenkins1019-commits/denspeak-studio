@@ -2,6 +2,12 @@ import { useEffect, useRef } from 'react';
 import { sectionLabel, type QueuedTake } from '../lib/handoff';
 import { formatDuration } from '../lib/format';
 
+/** The panel's rows whose delete is in flight, and whether a clear is. */
+export interface QueueBusy {
+  discards: string[];
+  clearing: boolean;
+}
+
 /**
  * The takes waiting for one section, shown from its rail count. Naming each
  * take before anything is thrown away is the point: "Clear all" is only offered
@@ -14,7 +20,7 @@ export function QueuePanel({
   label,
   takes,
   note,
-  busy = { discards: [], clearing: false },
+  busy,
   onDiscard,
   onClear,
   onOpen,
@@ -25,11 +31,11 @@ export function QueuePanel({
   /** Why a take that should have gone is still listed. */
   note?: string | null;
   /**
-   * The rows whose delete is in flight, and whether a clear is. A store can
-   * take seconds to answer, so the row or the button says it is working rather
-   * than leaving the press looking as though it went nowhere.
+   * A store can take seconds to answer a delete, so the row or the button says
+   * it is working rather than leaving the press looking as though it went
+   * nowhere.
    */
-  busy?: { discards: string[]; clearing: boolean };
+  busy: QueueBusy;
   onDiscard: (key: string) => void;
   onClear: () => void;
   onOpen: () => void;

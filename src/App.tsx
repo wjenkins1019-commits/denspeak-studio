@@ -12,7 +12,7 @@ import { usePendingCounts } from './lib/useHandoffTake';
 import { waitingAnnouncement, waitingFell } from './lib/waitingAnnouncement';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
-import { QueuePanel } from './components/QueuePanel';
+import { QueuePanel, type QueueBusy } from './components/QueuePanel';
 import Studio from './views/Studio';
 import Convert from './views/Convert';
 import Transcribe from './views/Transcribe';
@@ -74,10 +74,7 @@ export default function App() {
   const [queueNote, setQueueNote] = useState<string | null>(null);
   // What the panel is waiting on: rows whose delete is in flight, and a clear
   // under way. Kept above the panel so a slow store shows work, not stillness.
-  const [queueBusy, setQueueBusy] = useState<{ discards: string[]; clearing: boolean }>({
-    discards: [],
-    clearing: false,
-  });
+  const [queueBusy, setQueueBusy] = useState<QueueBusy>({ discards: [], clearing: false });
   const queueReturn = useRef<HTMLButtonElement | null>(null);
   // One live region speaks for the rail; it only carries increases.
   const [announcement, setAnnouncement] = useState('');
@@ -131,9 +128,9 @@ export default function App() {
     const target = queuePanel;
     const trigger = queueReturn.current;
     setQueueNote(null);
-    // Nothing is left on screen to be busy for; work still in flight resolves
-    // into a closed panel and settles this again on its own.
-    setQueueBusy({ discards: [], clearing: false });
+    // Busy state is left alone: a delete still in flight settles it in its own
+    // finally, and forgetting it here would reopen the panel on an idle button
+    // for a row the store is still deleting.
     setQueuePanel(null);
     // Back to the count that opened it; clearing a queue removes that control,
     // so the section's own rail entry is the fallback.
