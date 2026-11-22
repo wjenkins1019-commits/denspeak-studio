@@ -157,8 +157,34 @@ const RAIL_TEXT: Array<[fg: string, onActiveTint: boolean]> = [
   ['--dim', false],
 ];
 
-/** The window the page gradient is judged against. */
-const WINDOW = { width: 1280, height: 820 };
+/**
+ * The window sizes the page is laid out in, read from the Electron main process
+ * rather than assumed: the app opens at one size and can be dragged down to its
+ * minimum, and a bigger screen would be bigger again. The frame and title bar
+ * come off the smallest, because the page is shorter than the window it sits in.
+ */
+function windowSizes(): Array<{ width: number; height: number }> {
+  const main = readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
+  const options = main.match(/new BrowserWindow\(\{([\s\S]*?)\n  \}\);/);
+  if (!options) throw new Error('cannot read the BrowserWindow options in electron/main.js');
+
+  const option = (name: string) => {
+    const match = options[1].match(new RegExp(`\\b${name}:\\s*(\\d+)`));
+    if (!match) throw new Error(`BrowserWindow declares no ${name}`);
+    return Number(match[1]);
+  };
+
+  const opened = { width: option('width'), height: option('height') };
+  // Windows puts roughly this much chrome above the page; taking it off can
+  // only deepen the wash measured below, so it errs towards the stricter check.
+  const smallest = { width: option('minWidth') - 16, height: option('minHeight') - 100 };
+  // A maximised window on a large screen, so the range is not just one point.
+  const widest = { width: 2560, height: 1440 };
+
+  return [smallest, opened, widest];
+}
+
+const WINDOW_SIZES = windowSizes();
 
 /**
  * The deepest each wash in --bg-image gets inside the window. A radial gradient
@@ -180,14 +206,23 @@ function backgroundWashes(block: string): Colour[] {
   )) {
     const [, radiusX, radiusY, atX, atY, stop, fade] = match;
     const wash = colour(stop);
-    const centre = { x: (Number(atX) / 100) * WINDOW.width, y: (Number(atY) / 100) * WINDOW.height };
     let deepest = 0;
 
-    for (const x of [0, WINDOW.width]) {
-      for (const y of [0, WINDOW.height]) {
-        const from = Math.hypot((x - centre.x) / Number(radiusX), (y - centre.y) / Number(radiusY));
-        deepest = Math.max(deepest, Math.max(0, 1 - from / (Number(fade) / 100)));
-      }
+    // The wash is strongest at the point of the page nearest the gradient's
+    // centre, which for a centre above the top edge is the top edge itself —
+    // where the page heading sits. Its rates are fixed pixels while its centre
+    // moves with the window, so every window size is sampled.
+    for (const { width, height } of WINDOW_SIZES) {
+      const centre = { x: (Number(atX) / 100) * width, y: (Number(atY) / 100) * height };
+      const nearest = {
+        x: Math.min(Math.max(centre.x, 0), width),
+        y: Math.min(Math.max(centre.y, 0), height),
+      };
+      const from = Math.hypot(
+        (nearest.x - centre.x) / Number(radiusX),
+        (nearest.y - centre.y) / Number(radiusY),
+      );
+      deepest = Math.max(deepest, Math.max(0, 1 - from / (Number(fade) / 100)));
     }
 
     if (deepest > 0) washes.push({ rgb: wash.rgb, alpha: wash.alpha * deepest });
@@ -926,6 +961,17 @@ describe.each(THEMES)('$theme theme', ({ block }) => {
         }
       }
     }
+  });
+});
+
+describe('the window the page gradient is measured in', () => {
+  it('takes its sizes from the Electron window, smallest first', () => {
+    const [smallest, opened] = WINDOW_SIZES;
+    expect(smallest.width, 'the smallest window has no width').toBeGreaterThan(0);
+    expect(smallest.height, 'the smallest window has no height').toBeGreaterThan(0);
+    // The minimum is measured with the frame taken off, so it has to come out
+    // below the opened size; a parse that read the wrong numbers would not.
+    expect(smallest.height).toBeLessThan(opened.height);
   });
 });
 
