@@ -480,6 +480,32 @@ describe('hand-off navigation', () => {
     expect(document.activeElement).toBe(discard);
   });
 
+  it('spends one deadline on a clear however many takes are queued', async () => {
+    const store = new HungStore();
+    const panel = await openSongQueue(
+      ['A take', 'Another take', 'Third take', 'Fourth take'],
+      store,
+    );
+    // Long enough that a wait per row would plainly exceed it four times over.
+    setClearTimeout(200);
+
+    const clear = screen.getByRole('button', { name: 'Clear all 4' });
+    clear.focus();
+    const started = Date.now();
+    await act(async () => {
+      fireEvent.click(clear);
+    });
+
+    // The first hung delete spends the clear's whole budget, so the rest are
+    // kept without a wait each: the panel answers in the time one delete gets,
+    // not four, and still says why every row is listed.
+    expect(await screen.findByText(/Couldn’t remove 4 takes/)).toBeTruthy();
+    expect(Date.now() - started).toBeLessThan(550);
+    expect(panel.textContent).toContain('Fourth take');
+    expect(store.rows.size).toBe(4);
+    expect(document.activeElement).toBe(clear);
+  });
+
   it('says a take could not be opened when the store hangs instead of refusing', async () => {
     const store = new HungStore();
     setHandoffStore(store);

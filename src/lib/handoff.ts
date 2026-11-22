@@ -529,6 +529,10 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
  * whose rows actually went leave the queue; the rest stay visible so a failed
  * clear cannot come back as an arrival on the next run.
  *
+ * The whole clear holds to one deadline rather than one per row: rows still
+ * waiting when it passes are kept unasked, so a store that hangs cannot hold the
+ * panel for a wait per take.
+ *
  * Answers how many went.
  */
 export async function discardHandoffQueue(target: HandoffTarget): Promise<number> {
@@ -538,10 +542,19 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
   const asked = new Set(queue.map((entry) => entry.key));
   const kept = new Set<string>();
   let gone = 0;
+  const deadline = Date.now() + clearTimeoutMs;
 
   for (const key of asked) {
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      // The budget is spent: a delete started now would not be waited for, and
+      // the row would be reported kept either way.
+      kept.add(key);
+      continue;
+    }
+
     try {
-      await withinTimeout(store.remove(key), clearTimeoutMs);
+      await withinTimeout(store.remove(key), left);
       consumed.add(key);
       gone += 1;
     } catch {
