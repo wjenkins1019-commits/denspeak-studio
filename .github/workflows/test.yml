@@ -1,0 +1,45 @@
+name: Test
+
+# Release only runs on a version tag, so nothing checked a push or a pull
+# request: the colour guard in src/styles.contrast.test.ts, and every other
+# test, could be merged past unnoticed. This runs the suite on every branch
+# push and every pull request.
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # The suite runs in jsdom and never starts Electron; skipping the binary
+      # keeps the install to the packages the tests actually need.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # package.json asks for >=20; release builds on 22, so match it here.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
