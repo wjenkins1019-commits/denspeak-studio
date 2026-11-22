@@ -146,12 +146,13 @@ const COLOUR_ATTR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=(["']
 const COLOUR_PROP =
   /\b(color|backgroundColor|background|borderColor|outlineColor|textDecorationColor|fill|stroke|stopColor|floodColor|caretColor)\s*:\s*(['"])([^'"]*)\2/g;
 
-function components(dir: string): string[] {
+/** Every source module under `dir`: components and plain modules alike. */
+function sourceFiles(dir: string): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) found.push(...components(path));
-    else if (entry.endsWith('.tsx') && !entry.endsWith('.test.tsx')) found.push(path);
+    if (statSync(path).isDirectory()) found.push(...sourceFiles(path));
+    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) found.push(path);
   }
   return found;
 }
@@ -190,12 +191,12 @@ function inlineColours(label: string, source: string): string[] {
 
 /**
  * The styles.css half of the guard cannot see a colour passed straight to an
- * element, and a component that hard-codes one is just as far outside the token
- * pairs above. Components paint through tokens too: a raw colour fails here.
+ * element or kept in a module constant, and either one is just as far outside
+ * the token pairs above. Sources paint through tokens too: a raw colour fails.
  */
-describe('colours written inline in components', () => {
+describe('colours written inline in components and modules', () => {
   it('paints only through tokens', () => {
-    const offences = components(SRC).flatMap((file) =>
+    const offences = sourceFiles(SRC).flatMap((file) =>
       inlineColours(relative(SRC, file).replace(/\\/g, '/'), readFileSync(file, 'utf8')),
     );
 
@@ -251,6 +252,15 @@ describe('what the scans read', () => {
       "Card.tsx:3  color: 'red'",
       "Card.tsx:3  background: '#ff0000'",
     ]);
+  });
+
+  it('finds a colour a plain module keeps as a constant', () => {
+    const source = [
+      "export const RAIL_TINT = '#5aa8ff';",
+      "export const fallback = { accent: '#0b7396' };",
+    ].join('\n');
+
+    expect(inlineColours('theme.ts', source)).toEqual(['theme.ts:1  #5aa8ff', 'theme.ts:2  #0b7396']);
   });
 
   it('does not read a URL as the start of a comment', () => {
