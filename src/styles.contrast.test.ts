@@ -4,10 +4,13 @@
 // below holds to — body and quiet labels, accent text, the focus ring, and the
 // text on accent-filled surfaces (the primary button's gradient at both ends,
 // and the rail's count badge, which is filled with --accent).
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+const SRC = fileURLToPath(new URL('.', import.meta.url));
 
 type Rgb = [number, number, number];
 type Colour = { rgb: Rgb; alpha: number };
@@ -127,6 +130,57 @@ describe('text painted with a raw colour', () => {
     // pair above, so it fails here instead of reaching a screen unchecked.
     const painted = literals().map((literal) => `${literal.selector} { ${literal.property}: ${literal.value} }`);
     expect(painted).toEqual([]);
+  });
+});
+
+/** A hex, rgb() or hsl() anywhere in a component, however it is spelled. */
+const RAW_COLOUR = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/gi;
+
+/** A colour may be a token, or a keyword that borrows the context it is in. */
+const THEMED_VALUE =
+  /^(var\(--[a-z0-9-]+\)|transparent|currentColor|none|inherit|unset|undefined|url\(#|(?:linear|radial|conic)-gradient\()/i;
+
+const COLOUR_ATTR = /\b(fill|stroke|stopColor|floodColor|color|caretColor)=(["'])([^"']*)\2/g;
+const COLOUR_PROP =
+  /\b(color|backgroundColor|background|borderColor|outlineColor|textDecorationColor|fill|stroke|stopColor|floodColor|caretColor)\s*:\s*(['"])([^'"]*)\2/g;
+
+function components(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) found.push(...components(path));
+    else if (entry.endsWith('.tsx') && !entry.endsWith('.test.tsx')) found.push(path);
+  }
+  return found;
+}
+
+/**
+ * The styles.css half of the guard cannot see a colour passed straight to an
+ * element, and a component that hard-codes one is just as far outside the token
+ * pairs above. Components paint through tokens too: a raw colour fails here.
+ */
+describe('colours written inline in components', () => {
+  it('paints only through tokens', () => {
+    const offences: string[] = [];
+
+    for (const file of components(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      const note = (index: number, fragment: string) => {
+        const line = text.slice(0, index).split('\n').length;
+        offences.push(`${relative(SRC, file).replace(/\\/g, '/')}:${line}  ${fragment.trim()}`);
+      };
+
+      for (const match of text.matchAll(RAW_COLOUR)) note(match.index ?? 0, match[0]);
+
+      for (const pattern of [COLOUR_ATTR, COLOUR_PROP]) {
+        for (const match of text.matchAll(pattern)) {
+          if (THEMED_VALUE.test(match[3].trim())) continue;
+          note(match.index ?? 0, match[0]);
+        }
+      }
+    }
+
+    expect(offences).toEqual([]);
   });
 });
 

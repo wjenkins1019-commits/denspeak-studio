@@ -3,32 +3,41 @@ import { useId } from 'react';
 /**
  * The Denspeak Studio mark: a speech bubble with a waveform cut out of it.
  * Same shapes as assets/icon.svg, with per-instance gradient ids so the rail
- * and the About card can both be on screen without colliding.
+ * and the About card can both be on screen without colliding. Its colours come
+ * from the `.logo-mark` palette in styles.css — brand art, the same in both
+ * themes — so no component carries a raw colour.
  */
 export function LogoMark({ size = 42 }: { size?: number }) {
   const id = useId().replace(/[:]/g, '');
 
   return (
-    <svg viewBox="0 0 512 512" width={size} height={size} role="img" aria-label="Denspeak Studio">
+    <svg
+      className="logo-mark"
+      viewBox="0 0 512 512"
+      width={size}
+      height={size}
+      role="img"
+      aria-label="Denspeak Studio"
+    >
       <defs>
         <linearGradient id={`${id}-tile`} x1="0.1" y1="0" x2="0.9" y2="1">
-          <stop offset="0" stopColor="#0e2a4d" />
-          <stop offset="0.55" stopColor="#081a31" />
-          <stop offset="1" stopColor="#040d1a" />
+          <stop offset="0" stopColor="var(--logo-tile-top)" />
+          <stop offset="0.55" stopColor="var(--logo-tile-mid)" />
+          <stop offset="1" stopColor="var(--logo-deep)" />
         </linearGradient>
         <radialGradient id={`${id}-sheen`} cx="0.5" cy="0.05" r="0.85">
-          <stop offset="0" stopColor="#5aa8ff" stopOpacity="0.42" />
-          <stop offset="0.55" stopColor="#5aa8ff" stopOpacity="0.08" />
-          <stop offset="1" stopColor="#5aa8ff" stopOpacity="0" />
+          <stop offset="0" stopColor="var(--logo-sheen)" stopOpacity="0.42" />
+          <stop offset="0.55" stopColor="var(--logo-sheen)" stopOpacity="0.08" />
+          <stop offset="1" stopColor="var(--logo-sheen)" stopOpacity="0" />
         </radialGradient>
         <linearGradient id={`${id}-ink`} x1="0.15" y1="0" x2="0.85" y2="1">
-          <stop offset="0" stopColor="#9cf0ff" />
-          <stop offset="0.5" stopColor="#5ab4ff" />
-          <stop offset="1" stopColor="#3f7dff" />
+          <stop offset="0" stopColor="var(--logo-ink-top)" />
+          <stop offset="0.5" stopColor="var(--logo-ink-mid)" />
+          <stop offset="1" stopColor="var(--logo-ink-bottom)" />
         </linearGradient>
         <linearGradient id={`${id}-slot`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#061427" />
-          <stop offset="1" stopColor="#040d1a" />
+          <stop offset="0" stopColor="var(--logo-slot-top)" />
+          <stop offset="1" stopColor="var(--logo-deep)" />
         </linearGradient>
       </defs>
 

@@ -164,6 +164,19 @@ small {
   display: block;
 }
 
+/* The mark's own palette: brand art, so its tile is the same on paper as on
+   navy and none of it belongs in the theme tokens. */
+.logo-mark {
+  --logo-tile-top: #0e2a4d;
+  --logo-tile-mid: #081a31;
+  --logo-deep: #040d1a;
+  --logo-sheen: #5aa8ff;
+  --logo-ink-top: #9cf0ff;
+  --logo-ink-mid: #5ab4ff;
+  --logo-ink-bottom: #3f7dff;
+  --logo-slot-top: #061427;
+}
+
 .rail-credit {
   font-size: 10px;
   letter-spacing: 0.2em;
