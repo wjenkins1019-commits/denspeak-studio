@@ -400,7 +400,10 @@ describe('hand-off navigation', () => {
     );
 
     await act(async () => {
-      fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Waiting for Song' }).parentElement!);
+      // jsdom never performs the press's default focus move, so it cannot see
+      // the theft — but it can see the prevention that stops it in a browser.
+      const scrim = screen.getByRole('dialog', { name: 'Waiting for Song' }).parentElement!;
+      expect(fireEvent.mouseDown(scrim)).toBe(false);
     });
 
     expect(screen.queryByRole('dialog', { name: 'Waiting for Song' })).toBeNull();

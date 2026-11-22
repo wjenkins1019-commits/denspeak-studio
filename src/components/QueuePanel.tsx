@@ -125,7 +125,17 @@ export function QueuePanel({
   }, [keys]);
 
   return (
-    <div className="queue-scrim" onMouseDown={onClose}>
+    <div
+      className="queue-scrim"
+      onMouseDown={(event) => {
+        // A press on the scrim lands on nothing focusable, so the browser
+        // would move focus to the page behind the dialog after this runs,
+        // taking back the return focus onClose just placed. Cancelling the
+        // default keeps it where closing put it.
+        event.preventDefault();
+        onClose();
+      }}
+    >
       <section
         ref={panel}
         className="queue-panel"
