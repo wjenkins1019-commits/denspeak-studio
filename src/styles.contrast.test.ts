@@ -182,6 +182,47 @@ const NAMED_COLOURS = new Set(
 
 const namesColour = (value: string) => NAMED_COLOURS.has(value.trim().toLowerCase());
 
+/** Any colour name inside a run of text, as words rather than whole values. */
+const COLOUR_NAME = new RegExp(`\\b(${[...NAMED_COLOURS].join('|')})\\b`, 'gi');
+
+/** `${…}` is code, not CSS: blank it, keeping its length, before reading. */
+const withoutInterpolation = (source: string) =>
+  source.replace(/\$\{[^{}]*\}/g, (part) => ' '.repeat(part.length));
+
+/** A CSS property whose value paints: colours, borders, shadows, fills. */
+const paintsCss = (property: string) =>
+  /^--|(?:^|-)(?:color|background|background-image|border|border-(?:top|right|bottom|left)|outline|box-shadow|text-shadow|fill|stroke)$/.test(
+    property.trim().toLowerCase(),
+  );
+
+/**
+ * Colour names inside a string that reads as CSS. A stylesheet written as a
+ * template is text until it is rendered, so the declaration is found and its
+ * value read: `background: linear-gradient(red, …)`. A colour function with no
+ * property around it — a gradient handed straight to a style prop — counts too.
+ */
+function cssColours(css: string, base: number): Array<{ index: number; fragment: string }> {
+  const found: Array<{ index: number; fragment: string }> = [];
+  const source = withoutInterpolation(css);
+  const add = (offset: number, fragment: string) => found.push({ index: base + offset, fragment });
+  let declarations = 0;
+
+  for (const match of source.matchAll(/([-\w]+)\s*:\s*([^;{}]+)/g)) {
+    declarations += 1;
+    if (!paintsCss(match[1])) continue;
+
+    const value = match[2];
+    const start = (match.index ?? 0) + match[0].length - value.length;
+    for (const name of value.matchAll(COLOUR_NAME)) add(start + (name.index ?? 0), `${match[1]}: ${name[0]}`);
+  }
+
+  if (declarations === 0 && /-gradient\(|\brgba?\(|\bhsla?\(/i.test(source)) {
+    for (const name of source.matchAll(COLOUR_NAME)) add(name.index ?? 0, `'${name[0]}' in a colour function`);
+  }
+
+  return found;
+}
+
 /**
  * The value of a property, cut where the property ends rather than at the next
  * quote. Brackets and strings are counted so a comma inside a call does not end
@@ -410,6 +451,12 @@ function inlineColours(label: string, source: string): string[] {
     note(index, match[0]);
   }
 
+  // A stylesheet built in a string keeps its colours as text until it renders,
+  // so its declarations are read here rather than as a component's own paint.
+  for (const match of text.matchAll(QUOTED)) {
+    for (const colour of cssColours(match[2], (match.index ?? 0) + 1)) note(colour.index, colour.fragment);
+  }
+
   // The checks run property by property, so their findings are sorted back into
   // source order: a failure then reads down the file instead of jumping around.
   return offences
@@ -524,6 +571,30 @@ describe('what the scans read', () => {
     expect(inlineColours('Meter.tsx', "<rect fill={hot ? 'white' : 'var(--line)'} />")).toEqual([
       "Meter.tsx:1  fill: 'white'",
     ]);
+  });
+
+  it('finds a colour named in a stylesheet built in a string', () => {
+    const source = [
+      'const sheet = `',
+      '  background: linear-gradient(red, ${stop});',
+      '  color: white;',
+      '`;',
+    ].join('\n');
+
+    expect(inlineColours('Sheet.tsx', source)).toEqual([
+      'Sheet.tsx:2  background: red',
+      'Sheet.tsx:3  color: white',
+    ]);
+  });
+
+  it('finds a colour named in a gradient handed to a style', () => {
+    const source = 'const s = { background: `linear-gradient(${a}, red)` };';
+
+    expect(inlineColours('Sheet.tsx', source)).toEqual(["Sheet.tsx:1  'red' in a colour function"]);
+  });
+
+  it('leaves a property that does not paint alone', () => {
+    expect(inlineColours('Sheet.tsx', "const sheet = 'font-family: Red Hat Display;';")).toEqual([]);
   });
 
   it('reads an attribute expression that spans several lines', () => {
