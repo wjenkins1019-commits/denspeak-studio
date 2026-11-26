@@ -384,7 +384,9 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
     return;
   }
 
-      const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      // Random UUIDs, not timestamps: two tabs sending in the same millisecond
+      // must never mint the same row id and delete each other's takes.
+      const key = crypto.randomUUID();
   const at = Date.now();
   const entry: Pending = { item, key, at, hydrated: false, stored: false };
   const queue = pending.get(target);
@@ -555,42 +557,41 @@ function claimLock(): ClaimLock | null {
  * tabs acting on the same stored take serialize: the loser finds the row gone
  * instead of deleting nothing and delivering its stale copy — or delivering
  * a take the other tab just discarded. Without Web Locks the take is handled
- * as before. The grant itself times out, so a stuck holder cannot hang the
- * waiter for ever: callers fall back exactly as when the lock will not grant.
- * A grant arriving after the timeout finds timed-out work that refuses to run.
+ * as before. Only the grant times out, so a stuck holder cannot hang the
+ * waiter for ever; once granted, the work runs to its own delete deadline
+ * with no lock timer racing it. A grant arriving after the timeout finds
+ * timed-out work that refuses to run.
  */
 function withClaimLock<T>(key: string, work: () => Promise<T>, ms: number = lockTimeoutMs): Promise<T> {
   const locks = claimLock();
   if (!locks) return work();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      reject(new Error('the take lock would not grant'));
-    }, ms);
+  let grantResolve!: () => void;
+  let grantReject!: (error: unknown) => void;
+  const grantedInTime = new Promise<void>((resolve, reject) => {
+    grantResolve = resolve;
+    grantReject = reject;
   });
-  const settle = (): void => {
+  // Prevent an unhandled rejection when the late grant refuses after we
+  // already timed out waiting for it.
+  void grantedInTime.catch(() => {});
+  timer = setTimeout(() => {
+    timedOut = true;
+    grantReject(new Error('the take lock would not grant'));
+  }, ms);
+  const granted = locks.request(`chatter-box-handoff-take-${key}`, () => {
+    if (timedOut) return Promise.reject(new Error('the take lock would not grant'));
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
-  };
-  const granted = locks.request(`chatter-box-handoff-take-${key}`, () => {
-    if (timedOut) return Promise.reject(new Error('the take lock would not grant'));
+    grantResolve();
     return work();
   });
-  void granted.then(settle, settle);
-  return Promise.race([granted, timeout]).then(
-    (value) => {
-      settle();
-      return value;
-    },
-    (error: unknown) => {
-      settle();
-      throw error;
-    },
-  );
+  // Silence a late refusal after the grant already timed out.
+  void granted.catch(() => {});
+  return grantedInTime.then(() => granted);
 }
 
 async function claimStoredTake(target: HandoffTarget): Promise<Claim> {

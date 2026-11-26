@@ -11,9 +11,12 @@ import {
   discardHandoffQueue,
   flushHandoffWrites,
   hydrateHandoff,
+  pendingCount,
   queuedTakes,
   sendHandoff,
+  setClearTimeout,
   setHandoffStore,
+  setLockTimeout,
   takeHandoff,
   type HandoffItem,
   type HandoffTarget,
@@ -310,4 +313,176 @@ describe('handoff fuzz with serializing Web Locks', () => {
       }
     }
   });
+});
+
+describe('handoff fuzz with hanging locks and failing storage', () => {
+  const backing = new MemoryStore();
+  let restoreLocks: (() => void) | null = null;
+
+  beforeEach(() => {
+    backing.rows.clear();
+    setHandoffStore(backing);
+    clearHandoff();
+    setLockTimeout(8);
+    setClearTimeout(12);
+  });
+
+  afterEach(() => {
+    restoreLocks?.();
+    restoreLocks = null;
+    setLockTimeout();
+    setClearTimeout();
+    setHandoffStore(null);
+    clearHandoff();
+  });
+
+  it.each(SEEDS)('timeouts fail without taking, retry delivers once (seed %i)', async (seed) => {
+    const random = mulberry32(seed ^ 0x9e3779b9);
+    const pick = <T>(options: readonly T[]): T => options[Math.floor(random() * options.length)];
+    const blob = new Blob(['fuzz-hang-audio']);
+    const sent = new Set<string>();
+    const delivered = new Set<string>();
+    let seq = 0;
+    let failedClaims = 0;
+    let lockHangs = 0;
+    let lockGrants = 0;
+    let deleteHangs = 0;
+    let deleteThrows = 0;
+    let listFailures = 0;
+    let healthy = false;
+
+    function recordDelivery(item: HandoffItem): void {
+      expect(sent.has(item.name)).toBe(true);
+      expect(delivered.has(item.name)).toBe(false);
+      delivered.add(item.name);
+    }
+
+    // Faulting locks: sometimes never grant (timeout), sometimes grant late
+    // but inside the timeout, otherwise grant at once. Fully awaited per
+    // claim, so the run stays deterministic.
+    const holder = globalThis as unknown as { navigator: { locks?: unknown } };
+    const nav = holder.navigator;
+    const previous = nav?.locks;
+    const faultingLocks = {
+      request: <T>(name: string, work: () => Promise<T>): Promise<T> => {
+        void name;
+        if (healthy) {
+          lockGrants += 1;
+          return work();
+        }
+        const roll = random();
+        if (roll < 0.35) {
+          lockHangs += 1;
+          return new Promise<never>(() => {});
+        }
+                  if (roll < 0.5) {
+            lockGrants += 1;
+            return new Promise<T>((resolve, reject) => {
+              setTimeout(() => work().then(resolve, reject), 1);
+            });
+          }
+        lockGrants += 1;
+        return work();
+      },
+    };
+    if (nav) nav.locks = faultingLocks;
+    else holder.navigator = { locks: faultingLocks } as unknown as { locks?: unknown } as never;
+    restoreLocks = () => {
+      if (holder.navigator) {
+        if (previous === undefined) delete holder.navigator.locks;
+        else holder.navigator.locks = previous;
+      }
+    };
+
+    // Faulting store: deletes hang or throw, lists throw. Puts always land
+    // so a flush never hangs and a retry always has a row to delete.
+    const faulting: HandoffStore = {
+      async list(): Promise<HandoffRecord[]> {
+        if (!healthy && random() < 0.15) {
+          listFailures += 1;
+          throw new Error('list failed');
+        }
+        return backing.list();
+      },
+      async put(record: HandoffRecord): Promise<void> {
+        return backing.put(record);
+      },
+      async remove(key: string): Promise<void> {
+        if (!healthy) {
+          const roll = random();
+          if (roll < 0.2) {
+            deleteHangs += 1;
+            return new Promise<never>(() => {});
+          }
+          if (roll < 0.3) {
+            deleteThrows += 1;
+            throw new Error('delete failed');
+          }
+        }
+        return backing.remove(key);
+      },
+    };
+    setHandoffStore(faulting);
+
+    for (let step = 0; step < 80; step += 1) {
+      const roll = random();
+      if (roll < 0.32) {
+        const name = `hang-fuzz-${seed}-${seq}`;
+        seq += 1;
+        sent.add(name);
+        sendHandoff(pick(TARGETS), { name, blob, from: 'studio' });
+      } else if (roll < 0.58) {
+        // claimHandoff distinguishes failed (kept queued) from empty.
+        const target = pick(TARGETS);
+        const before = pendingCount(target);
+        const claim = await claimHandoff(target);
+        if (claim.status === 'taken') recordDelivery(claim.item);
+        else if (claim.status === 'failed') {
+          failedClaims += 1;
+          // Failed-not-taken: nothing delivered and the failed take stays
+          // queued for retry. Takes stolen ahead of it may have dropped,
+          // so the count can shrink but never to empty or above before.
+          expect(before).toBeGreaterThan(0);
+          expect(pendingCount(target)).toBeGreaterThanOrEqual(1);
+          expect(pendingCount(target)).toBeLessThanOrEqual(before);
+        }
+      } else if (roll < 0.68) {
+        const target = pick(TARGETS);
+        const queued = queuedTakes(target);
+        if (queued.length > 0) await discardHandoff(target, pick(queued).key);
+      } else if (roll < 0.74) {
+        await discardHandoffQueue(pick(TARGETS));
+      } else if (roll < 0.8) {
+        await hydrateHandoff();
+      } else if (roll < 0.88) {
+        await flushHandoffWrites();
+      } else {
+        clearHandoff();
+        await hydrateHandoff();
+      }
+    }
+
+    // Every fault branch must have fired, else the timeouts proved nothing.
+    expect(lockHangs).toBeGreaterThan(0);
+    expect(lockGrants).toBeGreaterThan(0);
+    expect(deleteHangs + deleteThrows).toBeGreaterThan(0);
+    expect(listFailures).toBeGreaterThan(0);
+    expect(failedClaims).toBeGreaterThan(0);
+    expect(delivered.size).toBeGreaterThan(0);
+
+    // Exactly-once retry: faults clear, every survivor drains at most once.
+    healthy = true;
+    setLockTimeout();
+    setClearTimeout();
+    await flushHandoffWrites();
+    clearHandoff();
+    await hydrateHandoff();
+    for (const target of TARGETS) {
+      for (;;) {
+        const taken = await takeHandoff(target);
+        if (!taken) break;
+        recordDelivery(taken);
+      }
+    }
+  }, 20000);
 });
