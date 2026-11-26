@@ -6,6 +6,8 @@ import {
   claimHandoff,
   clearHandoff,
   currentSection,
+  handoffDiagnostics,
+  handoffFailures,
   returnTake,
   sendHandoff,
   setHandoffStore,
@@ -1081,5 +1083,47 @@ describe('durable queue', () => {
     await hydrateHandoff();
 
     expect(pendingCounts()).toEqual({ convert: 2 });
+  });
+
+  it('tracks a failed open for retry and clears it once the take opens', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(handoffFailures('convert')).toEqual([]);
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+    expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+    store.remove = remove;
+
+    const failures = handoffFailures('convert');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ name: 'A take', target: 'convert', attempts: 1 });
+    expect(handoffDiagnostics()).toMatchObject({ queued: 1, failed: 1 });
+
+    expect(await claimHandoff('convert')).toMatchObject({ status: 'taken' });
+    expect(handoffFailures('convert')).toEqual([]);
+    expect(handoffDiagnostics()).toMatchObject({ queued: 0, failed: 0 });
+  });
+
+  it('tracks a lock timeout for retry and clears it on discard', async () => {
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = { request: () => new Promise<never>(() => {}) };
+    setLockTimeout(20);
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+      expect(handoffFailures('convert')).toHaveLength(1);
+    } finally {
+      setLockTimeout();
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+    const [queued] = queuedTakes('convert');
+    expect(await discardHandoff('convert', queued.key)).toBe(true);
+    expect(handoffFailures('convert')).toEqual([]);
   });
 });

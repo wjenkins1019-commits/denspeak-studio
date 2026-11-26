@@ -140,6 +140,49 @@ const pending = new Map<HandoffTarget, Pending[]>();
 
 /** Row ids already handed over, so a late hydration cannot deliver them twice. */
 const consumed = new Set<string>();
+/** Cap: every taken or discarded take stays consumed, so bound the set. */
+const MAX_CONSUMED_KEYS = 500;
+
+function rememberConsumed(key: string): void {
+  consumed.delete(key);
+  consumed.add(key);
+  while (consumed.size > MAX_CONSUMED_KEYS) {
+    const oldest = consumed.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    consumed.delete(oldest);
+  }
+}
+
+/** Consecutive failed open attempts per queued take, for retry surfacing. */
+interface FailedTake {
+  target: HandoffTarget;
+  name: string;
+  attempts: number;
+  lastFailedAt: number;
+}
+const failedTakes = new Map<string, FailedTake>();
+/** Cap: failures are per queued take, so bound the map like the queue. */
+const MAX_FAILED_TAKES = 200;
+
+function noteFailed(target: HandoffTarget, entry: Pending): void {
+  const previous = failedTakes.get(entry.key);
+  failedTakes.delete(entry.key);
+  failedTakes.set(entry.key, {
+    target,
+    name: entry.item.name,
+    attempts: (previous?.attempts ?? 0) + 1,
+    lastFailedAt: Date.now(),
+  });
+  while (failedTakes.size > MAX_FAILED_TAKES) {
+    const oldest = failedTakes.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    failedTakes.delete(oldest);
+  }
+}
+
+function clearFailed(key: string): void {
+  failedTakes.delete(key);
+}
 
 let store: HandoffStore = indexedDbHandoffStore;
 
@@ -162,6 +205,10 @@ function queuePut(key: string, put: () => Promise<void>, after?: () => Promise<v
   const putDone = prev.catch(() => {}).then(put);
   const tail = putDone.catch(() => {});
   putTails.set(key, tail);
+  const cleanup = () => {
+    if (putTails.get(key) === tail) putTails.delete(key);
+  };
+  void tail.then(cleanup, cleanup);
   const tracked: Promise<void> = putDone.then(
     () => after?.(),
     () => after?.(),
@@ -612,6 +659,7 @@ async function claimStoredTake(target: HandoffTarget): Promise<Claim> {
         const outcome = await claimHydratedHead(target, head);
         if (outcome.status !== 'stolen') return outcome;
       } catch {
+        noteFailed(target, head);
         return { status: 'failed' };
       }
       continue;
@@ -631,8 +679,10 @@ async function claimHead(target: HandoffTarget): Promise<Claim> {
     // is still on disk, so the take stays queued and the section has to say so
     // rather than sit silent with the take caught between queued and shown.
     await withinTimeout(removeStored(entry.key), clearTimeoutMs);
+    clearFailed(entry.key);
     return { status: 'taken', entry };
   } catch {
+    noteFailed(target, entry);
     restoreQueued(target, entry);
     return { status: 'failed' };
   } finally {
@@ -676,8 +726,10 @@ async function claimHydratedHead(
     claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
     try {
       await withinTimeout(removeStored(entry.key), clearTimeoutMs);
+      clearFailed(entry.key);
       return { status: 'taken', entry };
     } catch {
+      noteFailed(target, entry);
       restoreQueued(target, entry);
       return { status: 'failed' };
     } finally {
@@ -725,7 +777,7 @@ function claimQueued(target: HandoffTarget): Pending | null {
   if (queue.length === 0) pending.delete(target);
   // Blocks a late hydration from reading the row back while the delete is in
   // flight.
-  consumed.add(entry.key);
+  rememberConsumed(entry.key);
   queuesChanged();
   return entry;
 }
@@ -740,7 +792,7 @@ function takeQueuedByKey(target: HandoffTarget, key: string): Pending | null {
   if (queue.length === 0) pending.delete(target);
   // Blocks a late hydration from reading the row back while the delete is in
   // flight.
-  consumed.add(entry.key);
+  rememberConsumed(entry.key);
   queuesChanged();
   return entry;
 }
@@ -757,7 +809,8 @@ function dropStolen(target: HandoffTarget, key: string): void {
     if (index >= 0) queue.splice(index, 1);
     if (queue.length === 0) pending.delete(target);
   }
-  consumed.add(key);
+  rememberConsumed(key);
+  clearFailed(key);
   queuesChanged();
 }
 
@@ -898,7 +951,8 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
       // which case there is nothing left to take out of the queue.
       const current = pending.get(target);
       const index = current ? current.findIndex((entry) => entry.key === key) : -1;
-      consumed.add(key);
+      rememberConsumed(key);
+      clearFailed(key);
       if (current && index >= 0) {
         current.splice(index, 1);
         if (current.length === 0) pending.delete(target);
@@ -981,7 +1035,8 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
     }
 
     if (cleared) {
-      consumed.add(key);
+      rememberConsumed(key);
+      clearFailed(key);
       gone += 1;
     } else {
       kept.add(key);
@@ -1040,9 +1095,42 @@ export async function takeHandoff(target: HandoffTarget): Promise<HandoffItem | 
 export function clearHandoff(): void {
   pending.clear();
   consumed.clear();
+  failedTakes.clear();
   claimingTargets.clear();
   hydration = null;
   putTails.clear();
   pendingWork.clear();
   queuesChanged();
+}
+
+/** A queued take that failed to open, for retry surfacing. */
+export interface HandoffFailure {
+  key: string;
+  name: string;
+  target: HandoffTarget;
+  attempts: number;
+  lastFailedAt: number;
+}
+
+/** Takes still queued after a failed open, oldest-failed first. */
+export function handoffFailures(target?: HandoffTarget): HandoffFailure[] {
+  const failures: HandoffFailure[] = [];
+  for (const [key, failure] of failedTakes) {
+    if (target && failure.target !== target) continue;
+    if (!pending.get(failure.target)?.some((entry) => entry.key === key)) continue;
+    failures.push({ key, ...failure });
+  }
+  return failures.sort((a, b) => a.lastFailedAt - b.lastFailedAt);
+}
+
+/** Bounded bookkeeping counts, for stuck-queue observability. */
+export function handoffDiagnostics(): {
+  queued: number;
+  failed: number;
+  consumed: number;
+  pendingWrites: number;
+} {
+  let queued = 0;
+  for (const queue of pending.values()) queued += queue.length;
+  return { queued, failed: failedTakes.size, consumed: consumed.size, pendingWrites: pendingWork.size };
 }
