@@ -562,6 +562,47 @@ describe('durable queue', () => {
     }
   });
 
+  it('does not let a hung put stall a take for another section', async () => {
+    // Head-of-line block, pinned open: puts run per key, so a put that never
+    // settles must not wedge deletes for other takes. The hung take stays
+    // queued; the other section still takes its own.
+    const put = store.put.bind(store);
+    store.put = (record: HandoffRecord) =>
+      record.item.name === 'Hung take' ? new Promise<void>(() => {}) : put(record);
+    try {
+      sendHandoff('convert', { ...item, name: 'Hung take' });
+      sendHandoff('song', { ...item, name: 'Song take' });
+      await vi.waitFor(() =>
+        expect([...store.rows.values()].some((row) => row.item.name === 'Song take')).toBe(true),
+      );
+      expect(await takeHandoff('song')).toMatchObject({ name: 'Song take' });
+      expect(pendingCount('convert')).toBe(1);
+    } finally {
+      store.put = put;
+    }
+  });
+
+  it('does not let a hung put stall a discard for another take', async () => {
+    // Same section, later take: discarding it waits only for its own put,
+    // never for the hung put in front of it.
+    const put = store.put.bind(store);
+    store.put = (record: HandoffRecord) =>
+      record.item.name === 'Hung take' ? new Promise<void>(() => {}) : put(record);
+    try {
+      sendHandoff('convert', { ...item, name: 'Hung take' });
+      sendHandoff('convert', { ...item, name: 'Second take' });
+      await vi.waitFor(() =>
+        expect([...store.rows.values()].some((row) => row.item.name === 'Second take')).toBe(true),
+      );
+      const second = queuedTakes('convert').find((take) => take.name === 'Second take');
+      expect(second).toBeDefined();
+      expect(await discardHandoff('convert', second!.key)).toBe(true);
+      expect(queuedTakes('convert').map((take) => take.name)).toEqual(['Hung take']);
+    } finally {
+      store.put = put;
+    }
+  });
+
   it('cannot deliver the same take twice from two timed-out claims', async () => {
     // Two tabs stuck on the same take lock must both report failed — neither
     // delivers — so the retry after the lock frees still hands over exactly once.

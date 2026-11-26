@@ -149,35 +149,58 @@ export function setHandoffStore(next: HandoffStore | null): void {
 }
 
 /**
- * Storage work runs in order, never in parallel: a take sent and then taken
- * straight away must not be written after its own delete and come back on the
- * next reload.
+ * Storage puts run per key, never on one global chain: a take sent and then
+ * taken straight away must not be written after its own delete and come back
+ * on the next reload, but a hung put for one take must not stall deletes for
+ * another. Each key's puts stay ordered; different keys run in parallel.
  */
-let writes: Promise<void> = Promise.resolve();
+const putTails = new Map<string, Promise<void>>();
+const pendingWork = new Set<Promise<void>>();
 
-function write(work: () => Promise<void>): void {
-  writes = writes.then(work, work).catch(() => {});
+function queuePut(key: string, put: () => Promise<void>, after?: () => Promise<void>): void {
+  const prev = putTails.get(key) ?? Promise.resolve();
+  const putDone = prev.catch(() => {}).then(put);
+  const tail = putDone.catch(() => {});
+  putTails.set(key, tail);
+  const tracked: Promise<void> = putDone.then(
+    () => after?.(),
+    () => after?.(),
+  ).then(
+    () => {},
+    () => {},
+  );
+  pendingWork.add(tracked);
+  void tracked.then(() => {
+    pendingWork.delete(tracked);
+  });
 }
 
 /**
  * Test-only: wait until the storage work queued so far has landed. Sends and
- * put-backs write through `writes`, so after this their rows are on disk and
- * any prune they triggered has run. Deletes are awaited by their own callers
- * instead, so an in-flight delete is not covered — wait for its take.
+ * put-backs queue through `queuePut`, so after this their rows are on disk
+ * and any prune they triggered has run. Deletes are awaited by their own
+ * callers instead, so an in-flight delete is not covered — wait for its take.
+ * A put that never settles never lets this resolve; tests hold puts only
+ * around the delete they are proving non-blocking, never across a flush.
  */
 export function flushHandoffWrites(): Promise<void> {
-  write(() => Promise.resolve());
-  return writes;
+  const snapshot = [...pendingWork];
+  if (snapshot.length === 0) return Promise.resolve();
+  return Promise.all(snapshot).then(() => {
+    if (pendingWork.size > 0) return flushHandoffWrites();
+  });
 }
 
 /**
- * Delete a row only after earlier storage work has landed. Sends queue their
- * puts through `writes`, so a delete issued straight after a send must wait
- * for that chain: deleting first and putting after leaves an orphan row the
- * next run hydrates back — the take delivered twice.
+ * Delete a row only after its own put has landed. Sends queue their puts per
+ * key, so a delete issued straight after a send must wait for that key's
+ * chain: deleting first and putting after leaves an orphan row the next run
+ * hydrates back — the take delivered twice. Puts for other keys are never
+ * waited for, so one hung put cannot stall later deletes for other takes.
  */
 function removeStored(key: string): Promise<void> {
-  return writes.then(() => store.remove(key));
+  const wait = putTails.get(key) ?? Promise.resolve();
+  return wait.catch(() => {}).then(() => store.remove(key));
 }
 
 /** Sections a stored row may name; anything else was written by nothing here. */
@@ -374,13 +397,13 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   // for ever. The take counts as stored only once its put lands — only then
   // can a missing row mean another tab claimed it rather than this tab's
   // write queue not having caught up yet.
-  write(() =>
-    store
-      .put({ key, target, at, item })
-      .then(() => {
+  queuePut(
+    key,
+    () =>
+      store.put({ key, target, at, item }).then(() => {
         entry.stored = true;
-      })
-      .then(() => pruneStored()),
+      }),
+    () => pruneStored(),
   );
 }
 
@@ -751,7 +774,7 @@ function putBackHandoff(target: HandoffTarget, entry: Pending): void {
   // left in memory only. Until that put lands the row missing proves nothing,
   // so the take is unmarked as stored and claimed as before.
   entry.stored = false;
-  write(() =>
+  queuePut(entry.key, () =>
     store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(() => {
       entry.stored = true;
     }),
@@ -1018,6 +1041,7 @@ export function clearHandoff(): void {
   consumed.clear();
   claimingTargets.clear();
   hydration = null;
-  writes = Promise.resolve();
+  putTails.clear();
+  pendingWork.clear();
   queuesChanged();
 }
