@@ -1326,6 +1326,92 @@ describe('durable queue', () => {
     expect(pendingCount('convert')).toBe(0);
   });
 
+  it('stays memory-only when the main store reports QuotaExceededError', async () => {
+    // A full disk must not lose the take for this session: the send stays
+    // queued, the take still hands over once, and a reload stays empty
+    // because nothing was ever durably stored.
+    const quota = () => {
+      try {
+        return new DOMException('Quota exceeded', 'QuotaExceededError');
+      } catch {
+        const fallback = new Error('Quota exceeded');
+        fallback.name = 'QuotaExceededError';
+        return fallback;
+      }
+    };
+    const put = store.put.bind(store);
+    store.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      sendHandoff('convert', item);
+      // The failed put must not hang the flush: the queue carries on.
+      await flushHandoffWrites();
+      expect(store.rows.size).toBe(0);
+      expect(pendingCount('convert')).toBe(1);
+
+      expect(await takeHandoff('convert')).toEqual(item);
+      expect(pendingCount('convert')).toBe(0);
+      await flushHandoffWrites();
+    } finally {
+      store.put = put;
+    }
+
+    // Nothing reached the disk, so a reload has nothing to bring back —
+    // exactly once, with the single delivery above as the only one.
+    expect(store.rows.size).toBe(0);
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+
+    // And the session recovers once quota frees: the next take durably lands.
+    sendHandoff('convert', { ...item, name: 'After quota' });
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+    expect(await takeHandoff('convert')).toMatchObject({ name: 'After quota' });
+    await flushHandoffWrites();
+  });
+
+  it('still delivers when the outbox reports QuotaExceededError', async () => {
+    // No room for the crash-recovery intent must not wedge the take: the
+    // claim falls back to delete-before-handover — delivered once now,
+    // with no intent left to replay later.
+    const quota = () => {
+      try {
+        return new DOMException('Quota exceeded', 'QuotaExceededError');
+      } catch {
+        const fallback = new Error('Quota exceeded');
+        fallback.name = 'QuotaExceededError';
+        return fallback;
+      }
+    };
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+
+    const putOutbox = outbox.put.bind(outbox);
+    outbox.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      expect(await takeHandoff('convert')).toEqual(item);
+      await flushHandoffWrites();
+    } finally {
+      outbox.put = putOutbox;
+    }
+    expect(pendingCount('convert')).toBe(0);
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(0);
+    expect(handoffDiagnostics()).toMatchObject({ outbox: 0 });
+
+    // No intent, no replay: a reload stays empty after the one delivery.
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
   it('never resurrects a discarded take from a stale intent', async () => {
     sendHandoff('convert', item);
     await flushHandoffWrites();
