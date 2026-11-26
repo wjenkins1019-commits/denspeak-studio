@@ -1126,4 +1126,78 @@ describe('durable queue', () => {
     expect(await discardHandoff('convert', queued.key)).toBe(true);
     expect(handoffFailures('convert')).toEqual([]);
   });
+
+  it('keeps consumed keys bounded across many takes', async () => {
+    const MANY = 600;
+    for (let index = 0; index < MANY; index += 1) {
+      sendHandoff('convert', { ...item, name: `Take ${index}` });
+    }
+    await flushHandoffWrites();
+    for (let index = 0; index < MANY; index += 1) {
+      const taken = await takeHandoff('convert');
+      expect(taken?.name).toBe(`Take ${index}`);
+    }
+    expect(await takeHandoff('convert')).toBeNull();
+
+    const diagnostics = handoffDiagnostics();
+    expect(diagnostics.queued).toBe(0);
+    // Every take was consumed, but the set cannot grow with the session.
+    expect(diagnostics.consumed).toBeGreaterThan(0);
+    expect(diagnostics.consumed).toBeLessThanOrEqual(500);
+
+    // Bounded history still blocks replay: nothing comes back on reload.
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('keeps failed takes bounded across many retries of one take', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+
+    const remove = store.remove.bind(store);
+    store.remove = vi.fn(async () => {
+      throw new Error('delete failed');
+    });
+    try {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+      }
+    } finally {
+      store.remove = remove;
+    }
+
+    // Retries record attempts on the one queued take, not one entry each.
+    const failures = handoffFailures('convert');
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ name: 'A take', attempts: 100 });
+    expect(handoffDiagnostics()).toMatchObject({ queued: 1, failed: 1 });
+
+    expect(await claimHandoff('convert')).toMatchObject({ status: 'taken' });
+    expect(handoffDiagnostics()).toMatchObject({ queued: 0, failed: 0 });
+  });
+
+  it('clears per-key write tails after many sends', async () => {
+    const MANY = 300;
+    for (let index = 0; index < MANY; index += 1) {
+      const target = index % 2 === 0 ? 'convert' : 'song';
+      sendHandoff(target, { ...item, name: `Take ${index}` });
+    }
+    await flushHandoffWrites();
+
+    // Tails are per key and removed when their put settles: after the flush
+    // no key may still hold a chain, however many takes were sent.
+    expect(handoffDiagnostics()).toMatchObject({ pendingWrites: 0, pendingKeys: 0 });
+
+    expect(await discardHandoffQueue('convert')).toBeGreaterThan(0);
+    expect(await discardHandoffQueue('song')).toBeGreaterThan(0);
+    await flushHandoffWrites();
+    expect(handoffDiagnostics()).toMatchObject({
+      queued: 0,
+      failed: 0,
+      pendingWrites: 0,
+      pendingKeys: 0,
+    });
+  });
 });

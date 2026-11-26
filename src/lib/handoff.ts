@@ -1129,8 +1129,15 @@ export function handoffDiagnostics(): {
   failed: number;
   consumed: number;
   pendingWrites: number;
+  pendingKeys: number;
 } {
   let queued = 0;
   for (const queue of pending.values()) queued += queue.length;
-  return { queued, failed: failedTakes.size, consumed: consumed.size, pendingWrites: pendingWork.size };
+  return {
+    queued,
+    failed: failedTakes.size,
+    consumed: consumed.size,
+    pendingWrites: pendingWork.size,
+    pendingKeys: putTails.size,
+  };
 }
