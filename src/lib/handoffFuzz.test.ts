@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Interleaving fuzz over the hand-off queue: random sends, takes, discards,
 // clears, hydrations and crashes must never deliver the same take twice.
-// Delivery is delete-before-handover, so crashes and pruning may lose takes —
-// loss is allowed, replay is not. Seeded and fully awaited: deterministic.
+// The crash-recovery outbox replays a take whose row delete landed but whose
+// delivery ack did not — the replay is the take's only observed delivery, so
+// exactly-once still holds. Seeded and fully awaited: deterministic.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   claimHandoff,
@@ -15,6 +16,7 @@ import {
   queuedTakes,
   sendHandoff,
   setClearTimeout,
+  setHandoffOutboxStore,
   setHandoffStore,
   setLockTimeout,
   takeHandoff,
@@ -97,15 +99,19 @@ function installSerializingWebLocks(onRequest?: (name: string) => void): () => v
 
 describe('handoff fuzz', () => {
   const store = new MemoryStore();
+  const outbox = new MemoryStore();
 
   beforeEach(() => {
     store.rows.clear();
+    outbox.rows.clear();
     setHandoffStore(store);
+    setHandoffOutboxStore(outbox);
     clearHandoff();
   });
 
   afterEach(() => {
     setHandoffStore(null);
+    setHandoffOutboxStore(null);
     clearHandoff();
   });
 
@@ -116,6 +122,7 @@ describe('handoff fuzz', () => {
     const sent = new Set<string>();
     const delivered = new Set<string>();
     let seq = 0;
+    let crashRecoveries = 0;
 
     /** A delivery is at-most-once and of a take this run actually sent. */
     function recordDelivery(item: HandoffItem): void {
@@ -132,21 +139,41 @@ describe('handoff fuzz', () => {
         seq += 1;
         sent.add(name);
         sendHandoff(pick(TARGETS), { name, blob, from: 'studio' });
-      } else if (roll < 0.52) {
+      } else if (roll < 0.5) {
         const taken = await takeHandoff(pick(TARGETS));
-        if (taken) recordDelivery(taken);
-      } else if (roll < 0.6) {
+        if (taken) {
+          recordDelivery(taken);
+          // The background delivery ack must land before any later crash
+          // or hydrate, or its still-present intent would replay an
+          // already-observed take.
+          await flushHandoffWrites();
+        }
+      } else if (roll < 0.58) {
         // Claim then release: the section is gone before the delete lands,
         // so the take goes back rather than being lost — still once.
         const claim = await claimHandoff(pick(TARGETS));
         if (claim.status === 'taken') claim.release();
-      } else if (roll < 0.7) {
+      } else if (roll < 0.66) {
+        // Crash between the row delete and the intent clear: the claim
+        // holds an unacked intent, the process dies before observing it,
+        // and the next run replays the outbox as its only delivery.
+        const target = pick(TARGETS);
+        const claim = await claimHandoff(target);
+        if (claim.status === 'taken') {
+          crashRecoveries += 1;
+          // Never observed and never acked: drop it like a crash before
+          // the ack, then replay. Recording it here would make the replay
+          // look like a duplicate; dropping it is the crash.
+          clearHandoff();
+          await hydrateHandoff();
+        }
+      } else if (roll < 0.74) {
         const target = pick(TARGETS);
         const queued = queuedTakes(target);
         if (queued.length > 0) await discardHandoff(target, pick(queued).key);
-      } else if (roll < 0.77) {
+      } else if (roll < 0.8) {
         await discardHandoffQueue(pick(TARGETS));
-      } else if (roll < 0.85) {
+      } else if (roll < 0.86) {
         await hydrateHandoff();
       } else if (roll < 0.92) {
         await flushHandoffWrites();
@@ -159,6 +186,9 @@ describe('handoff fuzz', () => {
 
     // The run must have exercised real deliveries, not just empty takes.
     expect(delivered.size).toBeGreaterThan(0);
+    // The delete-clear crash window must have fired, or the replay proved
+    // nothing.
+    expect(crashRecoveries).toBeGreaterThan(0);
 
     // Drain whatever survived; leftovers must still arrive at most once.
     await flushHandoffWrites();
