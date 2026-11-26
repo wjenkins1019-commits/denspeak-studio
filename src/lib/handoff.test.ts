@@ -1229,6 +1229,57 @@ describe('durable queue', () => {
     expect(await takeHandoff('convert')).toBeNull();
   });
 
+  it('bounds the outbox to a section\u2019s newest intents, like pending takes', async () => {
+    const base = Date.now();
+    for (let index = 0; index < HANDOFF_MAX_STORED + 3; index += 1) {
+      const key = `outbox-take-${index}`;
+      await outbox.put({
+        key,
+        target: 'convert',
+        at: base + index,
+        item: { ...item, name: `Outbox take ${index}` },
+      });
+    }
+    expect(outbox.rows.size).toBe(HANDOFF_MAX_STORED + 3);
+
+    // A reload replays what the caps keep and prunes the rest, so a run
+    // that crashes without ever delivering cannot collect intents for ever.
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    await vi.waitFor(() => expect(outbox.rows.size).toBe(HANDOFF_MAX_STORED));
+
+    expect(pendingCount('convert')).toBe(HANDOFF_MAX_STORED);
+    const names = queuedTakes('convert').map((take) => take.name);
+    expect(names).not.toContain('Outbox take 0');
+    expect(names[names.length - 1]).toBe(`Outbox take ${HANDOFF_MAX_STORED + 2}`);
+  });
+
+  it('never replays or keeps a stale outbox intent', async () => {
+    await outbox.put({
+      key: 'outbox-stale',
+      target: 'convert',
+      at: Date.now() - HANDOFF_MAX_AGE_MS - 1000,
+      item: { ...item, name: 'Stale intent' },
+    });
+    await outbox.put({
+      key: 'outbox-fresh',
+      target: 'convert',
+      at: Date.now(),
+      item: { ...item, name: 'Fresh intent' },
+    });
+
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    await vi.waitFor(() => expect(outbox.rows.size).toBe(1));
+
+    // Stale takes stay dropped, like pending rows: only the fresh intent
+    // replays.
+    expect(pendingCount('convert')).toBe(1);
+    expect(queuedTakes('convert').map((take) => take.name)).toEqual(['Fresh intent']);
+  });
+
   it('recovers a take whose row delete landed but whose intent clear did not', async () => {
     sendHandoff('convert', item);
     await flushHandoffWrites();

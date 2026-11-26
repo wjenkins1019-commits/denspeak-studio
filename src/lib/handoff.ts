@@ -219,6 +219,10 @@ async function writeOutbox(target: HandoffTarget, entry: Pending): Promise<void>
       outboxStore.put({ key: entry.key, target, at: entry.at, item: entry.item }),
       clearTimeoutMs,
     );
+    // Best-effort, off the claim's critical path like the send prune: a run
+    // that claims without ever hydrating must not collect intents on disk
+    // for ever. The just-written intent is the newest, so the caps keep it.
+    void pruneOutbox();
   } catch {
     // Fail open to delete-before-handover: no intent, no replay, no wedge.
     outboxInflight.delete(entry.key);
@@ -386,6 +390,48 @@ async function pruneStored(rows?: HandoffRecord[]): Promise<void> {
   }
 }
 
+/**
+ * Delete outbox intents that are stale or over a section's limit, newest
+ * first so the newest intents are the ones that survive — the same caps as
+ * pending takes. A pruned intent falls back to delete-before-handover: a
+ * crash after its row's delete loses the take instead of replaying one the
+ * limits already dropped. Corrupt intents go too, so they cannot sit on disk
+ * wedging every future hydration. Best-effort and storage-only.
+ */
+async function pruneOutbox(rows?: HandoffRecord[]): Promise<void> {
+  try {
+    const all = rows ?? (await outboxStore.list());
+    const cutoff = Date.now() - HANDOFF_MAX_AGE_MS;
+    const kept = new Map<HandoffTarget, number>();
+
+    for (const row of [...all].reverse()) {
+      if (!isValidHandoffRecord(row)) {
+        try {
+          const key = corruptRowKey(row);
+          if (key) await outboxStore.remove(key);
+          if (key) outboxInflight.delete(key);
+        } catch {
+          // Keep pruning the rest; hydration quarantines what survives.
+        }
+        continue;
+      }
+      const count = kept.get(row.target) ?? 0;
+      if (row.at >= cutoff && count < HANDOFF_MAX_STORED) {
+        kept.set(row.target, count + 1);
+        continue;
+      }
+      try {
+        await outboxStore.remove(row.key);
+      } catch {
+        // Keep pruning the rest; the next hydrate retries.
+      }
+      outboxInflight.delete(row.key);
+    }
+  } catch {
+    // Storage unavailable: there is nothing to prune.
+  }
+}
+
 let hydration: Promise<void> | null = null;
 
 /**
@@ -516,7 +562,10 @@ function hydrate(): Promise<void> {
         if (byTarget.size > 0) queuesChanged();
 
         // Stale, over-limit and already-taken rows are not coming back.
+        // The outbox gets the same caps: stale or over-limit intents must
+        // never sit on disk waiting to resurrect a take the limits dropped.
         void pruneStored(valid);
+        void pruneOutbox();
       })
       .catch(() => {
         // Storage unavailable: the hand-off still works for this session.
