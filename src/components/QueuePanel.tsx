@@ -21,6 +21,7 @@ export function QueuePanel({
   takes,
   note,
   busy,
+  failures,
   onDiscard,
   onClear,
   onOpen,
@@ -28,6 +29,8 @@ export function QueuePanel({
 }: {
   label: string;
   takes: QueuedTake[];
+  /** Stuck takes and their consecutive failed opens, by row id. */
+  failures?: Array<{ key: string; attempts: number }>;
   /** Why a take that should have gone is still listed, said in the panel's line. */
   note?: string | null;
   /**
@@ -176,6 +179,7 @@ export function QueuePanel({
         <ul className="queue-list" ref={list}>
           {takes.map((take, index) => {
             const discarding = busy.discards.includes(take.key);
+            const stuck = failures?.find((failure) => failure.key === take.key);
 
             return (
               <li key={take.key}>
@@ -184,6 +188,7 @@ export function QueuePanel({
                   <small>
                     {take.from ? `from ${sectionLabel(take.from)}` : 'queued'}
                     {take.duration ? ` · ${formatDuration(take.duration)}` : ''}
+                    {stuck ? ` · needs retry (${stuck.attempts} ${stuck.attempts === 1 ? 'try' : 'tries'})` : ''}
                   </small>
                 </div>
                 {/* Left pressable while it waits: disabling the button the press

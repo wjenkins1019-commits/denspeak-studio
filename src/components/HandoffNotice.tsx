@@ -29,7 +29,7 @@ export function HandoffStatus<S>({ handoff }: { handoff: HandoffTake<S> }) {
       </div>
 
       <div role="status" aria-atomic="true">
-        {handoff.failed && <HandoffFailed onRetry={handoff.retry} />}
+        {handoff.failed && <HandoffFailed onRetry={handoff.retry} attempts={handoff.failedAttempts} />}
       </div>
 
       {!handoff.arrival && !handoff.failed && (
@@ -128,13 +128,14 @@ export function WaitingTakes({ waiting, onNext }: { waiting: number; onNext: () 
  * delete, and showing it anyway would bring it back on the next run. Saying so,
  * with another try, beats an empty section that looks like a lost take.
  */
-export function HandoffFailed({ onRetry }: { onRetry: () => void }) {
+export function HandoffFailed({ onRetry, attempts }: { onRetry: () => void; attempts?: number }) {
+  const tries = typeof attempts === 'number' && attempts > 1 ? ` (${attempts} tries)` : '';
   return (
     // No live-region role of its own: it is placed inside the section's standing
     // status region, so filling that region is what gets read aloud.
     <div className="row between">
       <small className="muted">
-        Couldn’t open your take — its saved copy wouldn’t clear, so it is still waiting.
+        Couldn’t open your take — its saved copy wouldn’t clear, so it is still waiting{tries}.
       </small>
       <button className="btn ghost small" onClick={onRetry}>
         Try again

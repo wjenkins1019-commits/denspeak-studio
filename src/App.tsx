@@ -4,11 +4,12 @@ import { cancelJob, getActiveJob, useRenderQueue } from './lib/renderQueue';
 import {
   discardHandoff,
   discardHandoffQueue,
+  handoffFailures,
   isHandoffRoute,
   queuedTakes,
   type HandoffTarget,
 } from './lib/handoff';
-import { usePendingCounts } from './lib/useHandoffTake';
+import { useFailedCounts, usePendingCounts } from './lib/useHandoffTake';
 import { waitingAnnouncement, waitingFell } from './lib/waitingAnnouncement';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
@@ -64,6 +65,9 @@ export default function App() {
   const queueTick = useRenderQueue();
   // Takes waiting per section, so the rail can say where one is queued.
   const waitingBySection = usePendingCounts();
+  // Takes still queued after a failed open, so the rail can say which count
+  // needs another try instead of just waiting.
+  const failedBySection = useFailedCounts();
   const activeJob = useMemo(() => getActiveJob(), [queueTick]);
   const [voiceId, setVoiceId] = useSetting<string>(SETTING_KEYS.voice, DEFAULT_VOICE);
   const [speed, setSpeed] = useSetting<number>(SETTING_KEYS.speed, 1);
@@ -221,7 +225,9 @@ export default function App() {
           {NAV.map((item) => {
             const target = isHandoffRoute(item.id) ? item.id : null;
             const waiting = target ? (waitingBySection[target] ?? 0) : 0;
+            const stuck = target ? (failedBySection[target] ?? 0) : 0;
             const takes = waiting === 1 ? '1 take' : `${waiting} takes`;
+            const retrySuffix = stuck > 0 ? `, ${stuck} ${stuck === 1 ? 'needs' : 'need'} retry` : '';
 
             return (
               <div className="nav-item-wrap" key={item.id}>
@@ -240,8 +246,8 @@ export default function App() {
                     className="nav-count"
                     aria-haspopup="dialog"
                     aria-expanded={queuePanel === target}
-                    aria-label={`${takes} waiting for ${item.label}. Review the queue`}
-                    title={`Review the ${takes} waiting for ${item.label}`}
+                    aria-label={`${takes} waiting for ${item.label}${retrySuffix}. Review the queue`}
+                    title={`Review the ${takes} waiting for ${item.label}${retrySuffix}`}
                     onClick={(event) => openQueue(target, event.currentTarget)}
                   >
                     {waiting}
@@ -311,6 +317,7 @@ export default function App() {
           takes={queuedTakes(queuePanel)}
           note={queueNote}
           busy={queueBusy}
+          failures={handoffFailures(queuePanel).map(({ key, attempts }) => ({ key, attempts }))}
           onDiscard={discardQueued}
           onClear={clearQueued}
           onOpen={openQueuedSection}

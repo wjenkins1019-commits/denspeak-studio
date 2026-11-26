@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   claimHandoff,
+  handoffFailures,
   hydrateHandoff,
   pendingCount,
   pendingCounts,
   subscribeHandoff,
   subscribeQueues,
+  type HandoffFailure,
   type HandoffItem,
   type HandoffTarget,
 } from './handoff';
@@ -45,6 +47,8 @@ export interface HandoffTake<S> {
   waiting: number;
   /** Whether a queued take could not be opened, and is still waiting. */
   failed: boolean;
+  /** Consecutive failed opens for this section's stuck take, for retry wording. */
+  failedAttempts?: number;
   /** Take the next queued take without leaving the section. */
   next: () => void;
   /** Try the take that failed to open again. */
@@ -72,6 +76,7 @@ export function useHandoffTake<S>(
   // A take whose row would not delete stays queued. The section says so and
   // offers another try rather than sitting empty as if nothing was sent.
   const [failed, setFailed] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
   // Subscribed once; the view's latest values are read through the ref, so a
   // new callback identity does not re-subscribe and double-take.
@@ -107,6 +112,7 @@ export function useHandoffTake<S>(
     latest.current.apply(item);
     setArrival({ item, before });
     setFailed(false);
+    setFailedAttempts(0);
     setWaiting(pendingCount(target));
   }
 
@@ -126,9 +132,14 @@ export function useHandoffTake<S>(
         if (alive.current) deliver(claim.item);
         else claim.release();
       }
-      else if (claim.status === 'failed') setFailed(true);
+      else if (claim.status === 'failed') {
+        setFailed(true);
+        const [stuck] = handoffFailures(target);
+        setFailedAttempts(stuck?.attempts ?? 1);
+      }
       else {
         setFailed(false);
+        setFailedAttempts(0);
         setWaiting(pendingCount(target));
       }
     });
@@ -137,13 +148,31 @@ export function useHandoffTake<S>(
   useEffect(() => {
     const take = !asked.current;
     asked.current = true;
-    return subscribeHandoff(target, deliver, { take, onFailed: () => setFailed(true) });
+    return subscribeHandoff(target, deliver, {
+      take,
+      onFailed: () => {
+        setFailed(true);
+        const [stuck] = handoffFailures(target);
+        setFailedAttempts(stuck?.attempts ?? 1);
+      },
+    });
   }, [target]);
 
   // A queued take can be discarded from the rail while this section is open;
   // keep "N more waiting" honest rather than leaving a count for audio that is
   // already gone.
-  useEffect(() => subscribeQueues(() => setWaiting(pendingCount(target))), [target]);
+  useEffect(
+    () =>
+      subscribeQueues(() => {
+        setWaiting(pendingCount(target));
+        const [stuck] = handoffFailures(target);
+        if (!stuck) {
+          setFailed(false);
+          setFailedAttempts(0);
+        }
+      }),
+    [target],
+  );
 
   return {
     arrival,
@@ -151,6 +180,7 @@ export function useHandoffTake<S>(
     waiting,
     /** Whether a queued take could not be opened, and is still waiting. */
     failed,
+    failedAttempts,
     /** Take the next queued take without leaving the section. */
     next: takeNext,
     /** Try the take that failed to open again. */
@@ -188,4 +218,45 @@ export function usePendingCounts(): Partial<Record<HandoffTarget, number>> {
   }, []);
 
   return counts;
+}
+
+/**
+ * Takes still queued after a failed open, per section, for the rail and the
+ * queue panel: a count that only says how many are waiting hides the ones
+ * that will not open without another try.
+ */
+export function useFailedCounts(): Partial<Record<HandoffTarget, number>> {
+  const [counts, setCounts] = useState<Partial<Record<HandoffTarget, number>>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const sync = () => {
+      if (!alive) return;
+      const next: Partial<Record<HandoffTarget, number>> = {};
+      for (const failure of handoffFailures()) {
+        next[failure.target] = (next[failure.target] ?? 0) + 1;
+      }
+      setCounts(next);
+    };
+
+    const stop = subscribeQueues(sync);
+    sync();
+    void hydrateHandoff().then(sync);
+
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, []);
+
+  return counts;
+}
+
+/** Takes still queued after a failed open, for one section's panel. */
+export function useHandoffFailures(target: HandoffTarget): HandoffFailure[] {
+  const [failures, setFailures] = useState<HandoffFailure[]>(() => handoffFailures(target));
+
+  useEffect(() => subscribeQueues(() => setFailures(handoffFailures(target))), [target]);
+
+  return failures;
 }
