@@ -26,8 +26,10 @@ export interface HandoffStore {
 }
 
 const DB_NAME = 'chatter-box-handoff';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'pending';
+/** In-flight takes: written before the main row is deleted, cleared after delivery. */
+const OUTBOX_STORE = 'outbox';
 
 /**
  * Entries read back may include values no section wrote. Drop what cannot be
@@ -51,6 +53,7 @@ function openDb(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'key' });
+      if (!db.objectStoreNames.contains(OUTBOX_STORE)) db.createObjectStore(OUTBOX_STORE, { keyPath: 'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('Could not open the hand-off store'));
@@ -101,5 +104,47 @@ export const indexedDbHandoffStore: HandoffStore = {
     // failure has to stay queued rather than arrive again on the next run.
     const db = await openDb();
     await requestToPromise(db.transaction(STORE, 'readwrite').objectStore(STORE).delete(key));
+  },
+};
+
+/**
+ * Crash-recovery outbox: an intent written before the main row is deleted and
+ * cleared after the take is delivered. A crash between the two leaves the
+ * intent on disk, so the next run can re-queue the take instead of losing it.
+ * Replays use the same row id, so reading the outbox twice never queues two
+ * copies — and a take whose main row survived needs no replay.
+ */
+export const indexedDbHandoffOutboxStore: HandoffStore = {
+  async list(): Promise<HandoffRecord[]> {
+    if (!hasDatabase()) return [];
+    try {
+      const db = await openDb();
+      const rows = await requestToPromise(
+        db.transaction(OUTBOX_STORE, 'readonly').objectStore(OUTBOX_STORE).getAll() as IDBRequest<
+          HandoffRecord[]
+        >,
+      );
+      return orderListedRows(rows);
+    } catch {
+      return [];
+    }
+  },
+
+  async put(record: HandoffRecord): Promise<void> {
+    // Best-effort by callers: when the outbox will not take the intent the
+    // claim falls back to delete-before-handover rather than wedge the queue.
+    if (!hasDatabase()) throw new Error('Hand-off outbox unavailable');
+    const db = await openDb();
+    await requestToPromise(db.transaction(OUTBOX_STORE, 'readwrite').objectStore(OUTBOX_STORE).put(record));
+  },
+
+  async remove(key: string): Promise<void> {
+    // No database means no intent that could replay.
+    if (!hasDatabase()) return;
+    // Left to throw on purpose: a take is delivered only once its intent is
+    // gone, so a refusal keeps the take queued for another try instead of
+    // risking a replayed duplicate on the next run.
+    const db = await openDb();
+    await requestToPromise(db.transaction(OUTBOX_STORE, 'readwrite').objectStore(OUTBOX_STORE).delete(key));
   },
 };

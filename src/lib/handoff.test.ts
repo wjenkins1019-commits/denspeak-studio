@@ -10,6 +10,7 @@ import {
   handoffFailures,
   returnTake,
   sendHandoff,
+  setHandoffOutboxStore,
   setHandoffStore,
   setClearTimeout,
   setLockTimeout,
@@ -253,16 +254,21 @@ class MemoryStore implements HandoffStore {
 
 describe('durable queue', () => {
   const store = new MemoryStore();
+  const outbox = new MemoryStore();
 
   beforeEach(() => {
     store.rows.clear();
     store.lists = 0;
+    outbox.rows.clear();
+    outbox.lists = 0;
     setHandoffStore(store);
+    setHandoffOutboxStore(outbox);
     clearHandoff();
   });
 
   afterEach(() => {
     setHandoffStore(null);
+    setHandoffOutboxStore(null);
     clearHandoff();
   });
 
@@ -1199,5 +1205,80 @@ describe('durable queue', () => {
       pendingWrites: 0,
       pendingKeys: 0,
     });
+  });
+
+  it('clears the outbox on a clean take, so a reload stays empty', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+
+    expect(await takeHandoff('convert')).toEqual(item);
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(0);
+    expect(handoffDiagnostics()).toMatchObject({ outbox: 0 });
+
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('recovers a take whose row delete landed but whose intent clear did not', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+
+    // The crash window: the main row goes, the outbox refusal keeps the take
+    // queued, and the process dies before another try.
+    const removeOutbox = outbox.remove.bind(outbox);
+    outbox.remove = vi.fn(async () => {
+      throw new Error('intent would not clear');
+    });
+    try {
+      expect(await takeHandoff('convert')).toBeNull();
+    } finally {
+      outbox.remove = removeOutbox;
+    }
+    expect(pendingCount('convert')).toBe(1);
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(1);
+
+    // A reload: memory is gone, the intent is not. Replay restores the row
+    // and queues the take once under the same id.
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    expect(pendingCount('convert')).toBe(1);
+    expect(store.rows.size).toBe(1);
+
+    // Replaying the same intent twice never queues a second copy.
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(1);
+
+    expect(await takeHandoff('convert')).toEqual(item);
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+  });
+
+  it('never resurrects a discarded take from a stale intent', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    const [queued] = queuedTakes('convert');
+
+    // A stale intent for the same row id, as a crashed claim would leave.
+    outbox.rows.set(queued.key, { key: queued.key, target: 'convert', at: Date.now(), item });
+    expect(await discardHandoff('convert', queued.key)).toBe(true);
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(0);
+
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
   });
 });

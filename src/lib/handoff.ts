@@ -3,7 +3,12 @@
 // that created them: navigating swaps the view, not the page. They are also
 // written to a store, so a reload does not take the audio with it.
 
-import { indexedDbHandoffStore, type HandoffRecord, type HandoffStore } from './handoffStore';
+import {
+  indexedDbHandoffOutboxStore,
+  indexedDbHandoffStore,
+  type HandoffRecord,
+  type HandoffStore,
+} from './handoffStore';
 
 export type HandoffTarget = 'studio' | 'convert' | 'transcribe' | 'process' | 'song';
 
@@ -191,6 +196,55 @@ export function setHandoffStore(next: HandoffStore | null): void {
   store = next ?? indexedDbHandoffStore;
 }
 
+let outboxStore: HandoffStore = indexedDbHandoffOutboxStore;
+
+/** Replace the crash-recovery outbox; tests hand in an in-memory one. */
+export function setHandoffOutboxStore(next: HandoffStore | null): void {
+  outboxStore = next ?? indexedDbHandoffOutboxStore;
+}
+
+/** Takes with an intent on disk whose delete has not been acknowledged yet. */
+const outboxInflight = new Set<string>();
+
+/**
+ * Record the intent to delete `entry` before its row goes: a crash between
+ * the row's delete and the delivery leaves the intent, so the next run can
+ * re-queue the take instead of losing it. Best-effort: when the outbox will
+ * not take it the claim falls back to delete-before-handover.
+ */
+async function writeOutbox(target: HandoffTarget, entry: Pending): Promise<void> {
+  outboxInflight.add(entry.key);
+  try {
+    await withinTimeout(
+      outboxStore.put({ key: entry.key, target, at: entry.at, item: entry.item }),
+      clearTimeoutMs,
+    );
+  } catch {
+    // Fail open to delete-before-handover: no intent, no replay, no wedge.
+    outboxInflight.delete(entry.key);
+  }
+}
+
+/**
+ * Forget a delivered take's intent: it must be gone before the take is handed
+ * over, or the next run replays it. A refusal keeps the take queued for
+ * another try rather than risk a duplicate.
+ */
+async function clearOutbox(key: string): Promise<void> {
+  try {
+    await withinTimeout(outboxStore.remove(key), clearTimeoutMs);
+  } catch {
+    throw new Error('the take intent would not clear');
+  }
+  outboxInflight.delete(key);
+}
+
+/** Forget an intent without failing when the take is gone either way. */
+function dropOutbox(key: string): void {
+  outboxInflight.delete(key);
+  void outboxStore.remove(key).catch(() => {});
+}
+
 /**
  * Storage puts run per key, never on one global chain: a take sent and then
  * taken straight away must not be written after its own delete and come back
@@ -340,7 +394,14 @@ function hydrate(): Promise<void> {
     hydration = store
       .list()
       .then(async (rows) => {
-        if (!Array.isArray(rows)) return;
+        if (!Array.isArray(rows)) rows = [];
+        let outboxRows: HandoffRecord[] = [];
+        try {
+          const listed = await outboxStore.list();
+          if (Array.isArray(listed)) outboxRows = listed;
+        } catch {
+          outboxRows = [];
+        }
 
         // Keys this run queued itself: every send is written to the store as
         // well as the queue, so a read of the store can return a row for a take
@@ -386,6 +447,63 @@ function hydrate(): Promise<void> {
           const list = byTarget.get(row.target) ?? [];
           list.unshift({ item: row.item, key: row.key, at: row.at, hydrated: true, stored: true });
           byTarget.set(row.target, list);
+        }
+
+        // Crash recovery: intents left by a claim whose row delete landed but
+        // whose intent clear did not are re-queued under the same row id, so a
+        // second hydrate never queues a second copy. Takes whose main row
+        // survived need no replay; stale or over-limit intents are dropped
+        // rather than resurrected. Replayed takes restore their main row and
+        // queue unstored, so the next claim deletes the restored row first.
+        const replayed = new Map<HandoffTarget, Pending[]>();
+        const queuedKeys = new Set<string>(held);
+        for (const list of byTarget.values()) {
+          for (const entry of list) queuedKeys.add(entry.key);
+        }
+        const outboxQuarantine: string[] = [];
+        const outboxValid: HandoffRecord[] = [];
+        for (const row of outboxRows) {
+          if (!isValidHandoffRecord(row)) {
+            const key = corruptRowKey(row);
+            if (key) outboxQuarantine.push(key);
+            continue;
+          }
+          outboxValid.push(row);
+        }
+        if (outboxQuarantine.length > 0) {
+          await Promise.all(outboxQuarantine.map((key) => outboxStore.remove(key).catch(() => {})));
+        }
+        for (const row of [...outboxValid].reverse()) {
+          if (consumed.has(row.key) || queuedKeys.has(row.key)) continue;
+          const count = kept.get(row.target) ?? 0;
+          if (row.at < cutoff || count >= HANDOFF_MAX_STORED) {
+            // Never resurrect what the age and count limits already dropped.
+            void outboxStore.remove(row.key).catch(() => {});
+            continue;
+          }
+          kept.set(row.target, count + 1);
+          queuedKeys.add(row.key);
+          const entry: Pending = {
+            item: row.item,
+            key: row.key,
+            at: row.at,
+            hydrated: true,
+            stored: false,
+          };
+          const list = replayed.get(row.target) ?? [];
+          list.unshift(entry);
+          replayed.set(row.target, list);
+          // Restore the main row the crash deleted: the next claim waits for
+          // this put before deleting, so it cannot orphan or double-deliver.
+          queuePut(row.key, () =>
+            store.put({ key: row.key, target: row.target, at: row.at, item: row.item }).then(() => {
+              entry.stored = true;
+            }),
+          );
+        }
+        for (const [target, list] of replayed) {
+          const existing = byTarget.get(target) ?? [];
+          byTarget.set(target, [...existing, ...list]);
         }
 
         for (const [target, list] of byTarget) {
@@ -675,10 +793,16 @@ async function claimHead(target: HandoffTarget): Promise<Claim> {
 
   claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
   try {
+    // The intent lands first: a crash between the row's delete and the
+    // delivery leaves the outbox, so the next run re-queues the take instead
+    // of losing it. The intent is cleared before handover, so a normal run
+    // never replays — replays use the same row id and dedupe.
+    await writeOutbox(target, entry);
     // A delete that never answers is no better than one that refuses: the row
     // is still on disk, so the take stays queued and the section has to say so
     // rather than sit silent with the take caught between queued and shown.
     await withinTimeout(removeStored(entry.key), clearTimeoutMs);
+    await clearOutbox(entry.key);
     clearFailed(entry.key);
     return { status: 'taken', entry };
   } catch {
@@ -725,7 +849,9 @@ async function claimHydratedHead(
 
     claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
     try {
+      await writeOutbox(target, entry);
       await withinTimeout(removeStored(entry.key), clearTimeoutMs);
+      await clearOutbox(entry.key);
       clearFailed(entry.key);
       return { status: 'taken', entry };
     } catch {
@@ -811,6 +937,7 @@ function dropStolen(target: HandoffTarget, key: string): void {
   }
   rememberConsumed(key);
   clearFailed(key);
+  dropOutbox(key);
   queuesChanged();
 }
 
@@ -826,8 +953,10 @@ function putBackHandoff(target: HandoffTarget, entry: Pending): void {
   restoreQueued(target, entry);
   // The row went before the listener did; store it again so the take is not
   // left in memory only. Until that put lands the row missing proves nothing,
-  // so the take is unmarked as stored and claimed as before.
+  // so the take is unmarked as stored and claimed as before. The intent is
+  // kept until the next delivery, so a crash before the put lands replays.
   entry.stored = false;
+  void writeOutbox(target, entry);
   queuePut(entry.key, () =>
     store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(() => {
       entry.stored = true;
@@ -943,6 +1072,9 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
         // A delete that never answers counts as one that refused: the row is still
         // there, so the take stays queued and the panel says why it is still listed.
         await withinTimeout(removeStored(key), clearTimeoutMs);
+        // The intent goes with the row: a stale outbox must never resurrect a
+        // take the user just threw away. A refusal keeps the take queued.
+        await clearOutbox(key);
       } catch {
         return false;
       }
@@ -1016,13 +1148,18 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
           } catch {
             rows = null;
           }
-          if (rows && !rows.some((row) => row?.key === key)) return true;
+          if (rows && !rows.some((row) => row?.key === key)) {
+            dropOutbox(key);
+            return true;
+          }
         }
 
         const innerLeft = deadline - Date.now();
         if (innerLeft <= 0) return false;
         try {
           await withinTimeout(removeStored(key), innerLeft);
+          await withinTimeout(outboxStore.remove(key), innerLeft);
+          outboxInflight.delete(key);
         } catch {
           return false;
         }
@@ -1037,6 +1174,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
     if (cleared) {
       rememberConsumed(key);
       clearFailed(key);
+      dropOutbox(key);
       gone += 1;
     } else {
       kept.add(key);
@@ -1079,12 +1217,13 @@ export function isHandoffRoute(route: string): route is HandoffTarget {
 /**
  * The oldest item queued for this section, if any, after its stored row is
  * gone. Reading it clears it, so the next visit starts with whatever was sent
- * after it, and no later run can hand it over again.
+ * after it, and no later run hands it over again once its intent is cleared.
  *
- * The delete lands first: a crash in the instant between the delete and the
- * section applying it loses that visit's take, but a take that was applied can
- * never be replayed. A failed delete leaves the take queued for the next
- * attempt instead.
+ * The intent lands before the delete and is cleared before handover: a crash
+ * between the row's delete and the intent's clear replays the take on the
+ * next run under the same row id (at-least-once), while a clean run clears
+ * both and never replays. A failed delete — or a refused intent clear —
+ * leaves the take queued for the next attempt instead.
  */
 export async function takeHandoff(target: HandoffTarget): Promise<HandoffItem | null> {
   const claim = await claimStoredTake(target);
@@ -1096,6 +1235,7 @@ export function clearHandoff(): void {
   pending.clear();
   consumed.clear();
   failedTakes.clear();
+  outboxInflight.clear();
   claimingTargets.clear();
   hydration = null;
   putTails.clear();
@@ -1130,6 +1270,7 @@ export function handoffDiagnostics(): {
   consumed: number;
   pendingWrites: number;
   pendingKeys: number;
+  outbox: number;
 } {
   let queued = 0;
   for (const queue of pending.values()) queued += queue.length;
@@ -1139,5 +1280,6 @@ export function handoffDiagnostics(): {
     consumed: consumed.size,
     pendingWrites: pendingWork.size,
     pendingKeys: putTails.size,
+    outbox: outboxInflight.size,
   };
 }
