@@ -45,6 +45,27 @@ export function orderListedRows(rows: HandoffRecord[]): HandoffRecord[] {
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+/**
+ * Test-only: drop the cached connection so the next store call re-opens the
+ * database. Lets the v1-to-v2 upgrade test start from a closed v1 without
+ * sharing the round-trip test's already-open v2 handle.
+ */
+export function __closeHandoffDbForTests(): Promise<void> {
+  const pending = dbPromise;
+  dbPromise = null;
+  if (!pending) return Promise.resolve();
+  return pending.then(
+    (db) => {
+      try {
+        db.close();
+      } catch {
+        // Already closed: the next open still starts fresh.
+      }
+    },
+    () => {},
+  );
+}
+
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
 
