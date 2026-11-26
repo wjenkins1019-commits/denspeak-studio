@@ -9,6 +9,7 @@ import {
   returnTake,
   sendHandoff,
   setHandoffStore,
+  setClearTimeout,
   setLockTimeout,
   subscribeHandoff,
   takeHandoff,
@@ -481,6 +482,41 @@ describe('durable queue', () => {
       expect(await takeHandoff('convert')).toBeNull();
       expect(pendingCount('convert')).toBe(0);
     } finally {
+      if (previous === undefined) delete holder.locks;
+      else holder.locks = previous;
+    }
+  });
+
+  it('keeps the take queued when its delete outlives the lock grant timeout', async () => {
+    // Nested-timeout pin: the lock grants in time, then the delete hangs past
+    // the lock deadline. Only the grant may time out — the granted work runs
+    // to its own delete deadline, reports failed, and keeps the take queued,
+    // so the retry after the store recovers delivers exactly once.
+    const holder = navigator as unknown as { locks?: unknown };
+    const previous = holder.locks;
+    holder.locks = {
+      request: (_name: string, work: () => Promise<unknown>) => work(),
+    };
+    setLockTimeout(20);
+    setClearTimeout(60);
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      expect(store.rows.size).toBe(1);
+
+      const remove = store.remove.bind(store);
+      store.remove = vi.fn(() => new Promise<never>(() => {}));
+      expect(await claimHandoff('convert')).toEqual({ status: 'failed' });
+      expect(pendingCount('convert')).toBe(1);
+      expect(store.rows.size).toBe(1);
+      store.remove = remove;
+
+      expect(await takeHandoff('convert')).toEqual(item);
+      expect(store.rows.size).toBe(0);
+      expect(await takeHandoff('convert')).toBeNull();
+    } finally {
+      setLockTimeout();
+      setClearTimeout();
       if (previous === undefined) delete holder.locks;
       else holder.locks = previous;
     }
