@@ -1144,6 +1144,9 @@ describe('durable queue', () => {
       expect(taken?.name).toBe(`Take ${index}`);
     }
     expect(await takeHandoff('convert')).toBeNull();
+    // Delivery acks run in the background: wait for them before reloading,
+    // or intents still in flight would replay.
+    await flushHandoffWrites();
 
     const diagnostics = handoffDiagnostics();
     expect(diagnostics.queued).toBe(0);
@@ -1212,8 +1215,11 @@ describe('durable queue', () => {
     await flushHandoffWrites();
     expect(store.rows.size).toBe(1);
 
+    // The intent is held through delivery and acked after: the row goes
+    // with the take, the background ack clears the intent.
     expect(await takeHandoff('convert')).toEqual(item);
     expect(store.rows.size).toBe(0);
+    await flushHandoffWrites();
     expect(outbox.rows.size).toBe(0);
     expect(handoffDiagnostics()).toMatchObject({ outbox: 0 });
 
@@ -1228,23 +1234,26 @@ describe('durable queue', () => {
     await flushHandoffWrites();
     expect(store.rows.size).toBe(1);
 
-    // The crash window: the main row goes, the outbox refusal keeps the take
-    // queued, and the process dies before another try.
+    // The crash window moved after delivery: the row goes, the take is
+    // shown, and only then does the ack refuse — so the take stays
+    // delivered instead of staying queued, and the intent replays it.
     const removeOutbox = outbox.remove.bind(outbox);
     outbox.remove = vi.fn(async () => {
       throw new Error('intent would not clear');
     });
     try {
-      expect(await takeHandoff('convert')).toBeNull();
+      expect(await takeHandoff('convert')).toEqual(item);
+      await flushHandoffWrites();
     } finally {
       outbox.remove = removeOutbox;
     }
-    expect(pendingCount('convert')).toBe(1);
+    expect(pendingCount('convert')).toBe(0);
     expect(store.rows.size).toBe(0);
     expect(outbox.rows.size).toBe(1);
 
     // A reload: memory is gone, the intent is not. Replay restores the row
-    // and queues the take once under the same id.
+    // and queues the take once under the same id (at-least-once: the first
+    // delivery already happened, the replay saves it from the crash).
     clearHandoff();
     await hydrateHandoff();
     await flushHandoffWrites();
@@ -1256,6 +1265,7 @@ describe('durable queue', () => {
     expect(pendingCount('convert')).toBe(1);
 
     expect(await takeHandoff('convert')).toEqual(item);
+    await flushHandoffWrites();
     expect(store.rows.size).toBe(0);
     expect(outbox.rows.size).toBe(0);
     expect(await takeHandoff('convert')).toBeNull();

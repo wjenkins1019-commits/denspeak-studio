@@ -28,7 +28,7 @@ export interface HandoffStore {
 const DB_NAME = 'chatter-box-handoff';
 const DB_VERSION = 2;
 const STORE = 'pending';
-/** In-flight takes: written before the main row is deleted, cleared after delivery. */
+/** In-flight takes: written before the main row is deleted, held until after the delivery ack. */
 const OUTBOX_STORE = 'outbox';
 
 /**
@@ -109,10 +109,12 @@ export const indexedDbHandoffStore: HandoffStore = {
 
 /**
  * Crash-recovery outbox: an intent written before the main row is deleted and
- * cleared after the take is delivered. A crash between the two leaves the
- * intent on disk, so the next run can re-queue the take instead of losing it.
- * Replays use the same row id, so reading the outbox twice never queues two
- * copies — and a take whose main row survived needs no replay.
+ * held until after the take's delivery is acked. A crash between the delete
+ * and the ack leaves the intent on disk, so the next run can re-queue the
+ * take instead of losing it — a crash after the ack can only follow a
+ * delivery, never replace it. Replays use the same row id, so reading the
+ * outbox twice never queues two copies — and a take whose main row survived
+ * needs no replay.
  */
 export const indexedDbHandoffOutboxStore: HandoffStore = {
   async list(): Promise<HandoffRecord[]> {

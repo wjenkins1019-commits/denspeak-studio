@@ -129,8 +129,10 @@ export function useHandoffTake<S>(
     void claimHandoff(target).then((claim) => {
       claiming.current = false;
       if (claim.status === 'taken') {
-        if (alive.current) deliver(claim.item);
-        else claim.release();
+        if (alive.current) {
+          deliver(claim.item);
+          void claim.acknowledge().catch(() => {});
+        } else claim.release();
       }
       else if (claim.status === 'failed') {
         setFailed(true);

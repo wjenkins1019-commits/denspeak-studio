@@ -203,14 +203,14 @@ export function setHandoffOutboxStore(next: HandoffStore | null): void {
   outboxStore = next ?? indexedDbHandoffOutboxStore;
 }
 
-/** Takes with an intent on disk whose delete has not been acknowledged yet. */
+/** Takes with an intent on disk whose delivery has not been acknowledged yet. */
 const outboxInflight = new Set<string>();
 
 /**
  * Record the intent to delete `entry` before its row goes: a crash between
- * the row's delete and the delivery leaves the intent, so the next run can
- * re-queue the take instead of losing it. Best-effort: when the outbox will
- * not take it the claim falls back to delete-before-handover.
+ * the row's delete and the delivery ack leaves the intent, so the next run
+ * can re-queue the take instead of losing it. Best-effort: when the outbox
+ * will not take it the claim falls back to delete-before-handover.
  */
 async function writeOutbox(target: HandoffTarget, entry: Pending): Promise<void> {
   outboxInflight.add(entry.key);
@@ -226,8 +226,11 @@ async function writeOutbox(target: HandoffTarget, entry: Pending): Promise<void>
 }
 
 /**
- * Forget a delivered take's intent: it must be gone before the take is handed
- * over, or the next run replays it. A refusal keeps the take queued for
+ * Forget a delivered take's intent, after its delivery has been acknowledged.
+ * The intent stays on disk through the handover, so a crash after the row's
+ * delete but before the ack replays the take instead of losing it — and a
+ * crash after the ack can only replay a take that was already delivered
+ * (at-least-once). Before delivery, a refusal keeps the take queued for
  * another try rather than risk a duplicate.
  */
 async function clearOutbox(key: string): Promise<void> {
@@ -635,12 +638,23 @@ export function subscribeHandoff(
     const current = open.get(target);
     if (!current || current.size === 0) {
       // The section closed while the row was being deleted: write it back
-      // rather than lose the take with the view.
+      // rather than lose the take with the view. The intent is kept for
+      // the next delivery, so no ack here.
       putBackHandoff(target, claim.entry);
       return;
     }
 
     for (const waiting of [...current]) waiting(claim.entry.item);
+    // The take is shown: only now is the intent cleared. A crash between
+    // delivery and this ack replays an already-delivered take rather than
+    // losing one that crashed after cleanup but before it was shown. A
+    // refusal leaves the intent for replay; the take stays delivered.
+    try {
+      await clearOutbox(claim.entry.key);
+    } catch {
+      // Already delivered: keep the intent so the next run replays instead
+      // of losing the take.
+    }
   })();
 
   return stop;
@@ -793,16 +807,17 @@ async function claimHead(target: HandoffTarget): Promise<Claim> {
 
   claimingTargets.set(target, (claimingTargets.get(target) ?? 0) + 1);
   try {
-    // The intent lands first: a crash between the row's delete and the
-    // delivery leaves the outbox, so the next run re-queues the take instead
-    // of losing it. The intent is cleared before handover, so a normal run
-    // never replays — replays use the same row id and dedupe.
+    // The intent lands first and is held until after the delivery ack: a
+    // crash between the row's delete and the ack leaves the outbox, so the
+    // next run re-queues the take instead of losing it. Clearing before
+    // handover is what lost takes that crashed after cleanup but before
+    // delivery — the intent is now cleared only once the take is shown.
+    // Replays use the same row id and dedupe.
     await writeOutbox(target, entry);
     // A delete that never answers is no better than one that refuses: the row
     // is still on disk, so the take stays queued and the section has to say so
     // rather than sit silent with the take caught between queued and shown.
     await withinTimeout(removeStored(entry.key), clearTimeoutMs);
-    await clearOutbox(entry.key);
     clearFailed(entry.key);
     return { status: 'taken', entry };
   } catch {
@@ -851,7 +866,6 @@ async function claimHydratedHead(
     try {
       await writeOutbox(target, entry);
       await withinTimeout(removeStored(entry.key), clearTimeoutMs);
-      await clearOutbox(entry.key);
       clearFailed(entry.key);
       return { status: 'taken', entry };
     } catch {
@@ -877,22 +891,58 @@ export type HandoffClaim =
        * arrival would have landed in.
        */
       release: () => void;
+      /**
+       * Clear the crash-recovery intent after the take is shown. The claim
+       * holds the intent through delivery; only this ack forgets it, so a
+       * crash before the ack replays instead of losing the take. Call it
+       * once the item is applied; never call it after `release`.
+       */
+      acknowledge: () => Promise<void>;
     }
   | { status: 'empty' }
   | { status: 'failed' };
 
 /**
+ * Clear a delivered take's crash-recovery intent. Call after the take is
+ * shown; a crash before this ack replays the take, a crash after it cannot
+ * lose a take that was never shown. Failures leave the intent for replay
+ * rather than risk losing an already-delivered take.
+ */
+export function acknowledgeHandoffDelivery(key: string): Promise<void> {
+  return clearOutbox(key);
+}
+
+/**
  * Try to take the next queued take and say what happened. `failed` means the
  * take is still queued: its row survived, so showing it would bring it back on
  * the next run. A section uses this to report the attempt and to try again.
+ * A `taken` claim holds its outbox intent until `acknowledge` runs — call it
+ * after applying the item, never after `release`.
  */
 export async function claimHandoff(target: HandoffTarget): Promise<HandoffClaim> {
   const claim = await claimStoredTake(target);
   if (claim.status === 'taken') {
     const entry = claim.entry;
-    return { status: 'taken', item: entry.item, release: () => putBackHandoff(target, entry) };
+    return {
+      status: 'taken',
+      item: entry.item,
+      release: () => putBackHandoff(target, entry),
+      acknowledge: () => acknowledgeHandoffDelivery(entry.key),
+    };
   }
   return claim.status === 'failed' ? { status: 'failed' } : { status: 'empty' };
+}
+
+/**
+ * Clear a delivered take's intent in the background, tracked so tests can
+ * flush it. A refusal keeps the intent for replay; the take stays delivered.
+ */
+function scheduleOutboxClear(key: string): void {
+  const work = clearOutbox(key).catch(() => {});
+  pendingWork.add(work);
+  void work.then(() => {
+    pendingWork.delete(work);
+  });
 }
 
 function claimQueued(target: HandoffTarget): Pending | null {
@@ -1217,17 +1267,21 @@ export function isHandoffRoute(route: string): route is HandoffTarget {
 /**
  * The oldest item queued for this section, if any, after its stored row is
  * gone. Reading it clears it, so the next visit starts with whatever was sent
- * after it, and no later run hands it over again once its intent is cleared.
+ * after it, and no later run hands it over again once its delivery is acked.
  *
- * The intent lands before the delete and is cleared before handover: a crash
- * between the row's delete and the intent's clear replays the take on the
- * next run under the same row id (at-least-once), while a clean run clears
- * both and never replays. A failed delete — or a refused intent clear —
- * leaves the take queued for the next attempt instead.
+ * The intent lands before the delete and is held until after delivery: a
+ * crash between the row's delete and the ack replays the take on the next
+ * run under the same row id (at-least-once), while a clean run acks and
+ * never replays. A failed delete leaves the take queued for the next
+ * attempt instead. The ack runs in the background once the item is handed
+ * back, so a crash after cleanup can only follow a delivery — never replace
+ * it. Flush writes to wait for a clean run's ack before reloading.
  */
 export async function takeHandoff(target: HandoffTarget): Promise<HandoffItem | null> {
   const claim = await claimStoredTake(target);
-  return claim.status === 'taken' ? claim.entry.item : null;
+  if (claim.status !== 'taken') return null;
+  scheduleOutboxClear(claim.entry.key);
+  return claim.entry.item;
 }
 
 /** Drop anything queued in memory. Used by tests between cases. */
