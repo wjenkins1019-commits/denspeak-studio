@@ -26,6 +26,9 @@ async function cleanStores(stores: HandoffStoreModule[]): Promise<void> {
     for (const row of await store.indexedDbHandoffOutboxStore.list()) {
       await store.indexedDbHandoffOutboxStore.remove(row.key);
     }
+    for (const row of await store.indexedDbHandoffDeliveredStore.list()) {
+      await store.indexedDbHandoffDeliveredStore.remove(row.key);
+    }
   }
 }
 
@@ -144,6 +147,55 @@ describe('handoff two real tabs', () => {
     await tabB.flushHandoffWrites();
 
     // Acked replays never come back.
+    tabA.clearHandoff();
+    tabB.clearHandoff();
+    await tabA.hydrateHandoff();
+    await tabB.hydrateHandoff();
+    expect(await tabA.takeHandoff('convert')).toBeNull();
+    expect(await tabB.takeHandoff('convert')).toBeNull();
+    await tabA.flushHandoffWrites();
+    await tabB.flushHandoffWrites();
+  }, 20000);
+
+  it('holds the per-take lock during hydrate replay when two tabs restart together', async () => {
+    const blob = new Blob(['two-tab-replay-lock-audio']);
+    tabA.sendHandoff('convert', { name: 'two-tab-replay-lock', blob, from: 'studio' });
+    await tabA.flushHandoffWrites();
+
+    tabA.clearHandoff();
+    tabB.clearHandoff();
+    await tabA.hydrateHandoff();
+    await tabB.hydrateHandoff();
+
+    // Crash between the row delete and the ack: the main row is gone, the
+    // outbox intent survives, and the claiming tab is gone with it.
+    const claim = await tabA.claimHandoff('convert');
+    expect(claim.status).toBe('taken');
+    tabA.clearHandoff();
+
+    // Both tabs restart at once and hydrate the same intent concurrently.
+    // The per-take Web Lock around the replay must let exactly one tab
+    // queue and restore it — not one copy each.
+    tabA.clearHandoff();
+    tabB.clearHandoff();
+    await Promise.all([tabA.hydrateHandoff(), tabB.hydrateHandoff()]);
+    await tabA.flushHandoffWrites();
+    await tabB.flushHandoffWrites();
+
+    expect(tabA.pendingCount('convert') + tabB.pendingCount('convert')).toBe(1);
+
+    // Drain from both tabs at once: exactly one delivery in total.
+    const [takenA, takenB] = await Promise.all([
+      tabA.takeHandoff('convert'),
+      tabB.takeHandoff('convert'),
+    ]);
+    const delivered = [takenA, takenB].filter((taken) => taken !== null);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.name).toBe('two-tab-replay-lock');
+    await tabA.flushHandoffWrites();
+    await tabB.flushHandoffWrites();
+
+    // Acked replays never come back in either tab.
     tabA.clearHandoff();
     tabB.clearHandoff();
     await tabA.hydrateHandoff();

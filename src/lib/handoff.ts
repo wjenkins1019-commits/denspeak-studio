@@ -630,6 +630,48 @@ function hydrate(): Promise<void> {
             void outboxStore.remove(row.key).catch(() => {});
             continue;
           }
+          // Two tabs restarting together see the same intent: serialize the
+          // replay decision on the per-take Web Lock and restore the main
+          // row while holding it, so the loser finds the row back and queues
+          // nothing instead of delivering a second copy. The row is restored
+          // synchronously here (not via queuePut), so it has landed before
+          // the lock is released; the queued entry is stored, so its claim
+          // verifies inside the lock like any hydrated take.
+          let winner = false;
+          let restored = false;
+          try {
+            winner = await withClaimLock(row.key, async () => {
+              if (consumed.has(row.key) || queuedKeys.has(row.key)) return false;
+              let current: HandoffRecord[] | null = null;
+              try {
+                current = await store.list();
+              } catch {
+                current = null;
+              }
+              if (current && current.some((candidate) => candidate?.key === row.key)) return false;
+              let intents: HandoffRecord[] | null = null;
+              try {
+                intents = await outboxStore.list();
+              } catch {
+                intents = null;
+              }
+              if (intents && !intents.some((candidate) => candidate?.key === row.key)) return false;
+              try {
+                await store.put({ key: row.key, target: row.target, at: row.at, item: row.item });
+                restored = true;
+              } catch {
+                // Disk will not take the row: queue memory-only below and let
+                // the claim fall back to delete-before-handover. Concurrent
+                // restarts under quota can still double-deliver; the alternative
+                // is dropping the take in both tabs.
+                restored = false;
+              }
+              return true;
+            });
+          } catch {
+            winner = false;
+          }
+          if (!winner) continue;
           kept.set(row.target, count + 1);
           queuedKeys.add(row.key);
           const entry: Pending = {
@@ -637,18 +679,20 @@ function hydrate(): Promise<void> {
             key: row.key,
             at: row.at,
             hydrated: true,
-            stored: false,
+            stored: restored,
           };
           const list = replayed.get(row.target) ?? [];
           list.unshift(entry);
           replayed.set(row.target, list);
-          // Restore the main row the crash deleted: the next claim waits for
-          // this put before deleting, so it cannot orphan or double-deliver.
-          queuePut(row.key, () =>
-            store.put({ key: row.key, target: row.target, at: row.at, item: row.item }).then(() => {
-              entry.stored = true;
-            }),
-          );
+          if (!restored) {
+            // Memory-only fallback: retry the restore so a later claim still
+            // deletes a landed row first instead of orphaning one.
+            queuePut(row.key, () =>
+              store.put({ key: row.key, target: row.target, at: row.at, item: row.item }).then(() => {
+                entry.stored = true;
+              }),
+            );
+          }
         }
         for (const [target, list] of replayed) {
           const existing = byTarget.get(target) ?? [];
