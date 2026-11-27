@@ -4,8 +4,11 @@
 // written to a store, so a reload does not take the audio with it.
 
 import {
+  indexedDbHandoffDeliveredStore,
   indexedDbHandoffOutboxStore,
   indexedDbHandoffStore,
+  type DeliveredRecord,
+  type DeliveredStore,
   type HandoffRecord,
   type HandoffStore,
 } from './handoffStore';
@@ -203,6 +206,76 @@ export function setHandoffOutboxStore(next: HandoffStore | null): void {
   outboxStore = next ?? indexedDbHandoffOutboxStore;
 }
 
+let deliveredStore: DeliveredStore = indexedDbHandoffDeliveredStore;
+
+/** Replace the delivered-ids store; tests hand in an in-memory one. */
+export function setHandoffDeliveredStore(next: DeliveredStore | null): void {
+  deliveredStore = next ?? indexedDbHandoffDeliveredStore;
+}
+
+function isValidDeliveredRecord(row: unknown): row is DeliveredRecord {
+  if (!row || typeof row !== 'object') return false;
+  const candidate = row as Partial<DeliveredRecord>;
+  return (
+    typeof candidate.key === 'string' &&
+    candidate.key.length > 0 &&
+    typeof candidate.at === 'number' &&
+    Number.isFinite(candidate.at)
+  );
+}
+
+/**
+ * Remember a delivery durably, only after its ack: a crash before the ack
+ * replays from the outbox (at-least-once), a restart after the ack finds the
+ * id here and never replays even a stale row that still names it. Claim-time
+ * `rememberConsumed` stays in-memory only, so a take put back before it was
+ * shown can still be delivered. Best-effort: when the store will not take
+ * the id the in-memory guard still holds for this run.
+ */
+function rememberDelivered(key: string): void {
+  rememberConsumed(key);
+  const work = deliveredStore.put({ key, at: Date.now() }).catch(() => {});
+  pendingWork.add(work);
+  void work.then(() => {
+    pendingWork.delete(work);
+  });
+  void pruneDelivered();
+}
+
+/**
+ * Keep delivered ids to the newest `MAX_CONSUMED_KEYS`, so the set cannot
+ * grow with the session. Corrupt rows go too. Best-effort and storage-only.
+ */
+async function pruneDelivered(rows?: DeliveredRecord[]): Promise<void> {
+  try {
+    const all = rows ?? (await deliveredStore.list());
+    const valid: DeliveredRecord[] = [];
+    for (const row of all) {
+      if (!isValidDeliveredRecord(row)) {
+        try {
+          const key = (row as { key?: unknown } | null | undefined)?.key;
+          if (typeof key === 'string' && key.length > 0) await deliveredStore.remove(key);
+        } catch {
+          // Keep pruning the rest; hydration quarantines what survives.
+        }
+        continue;
+      }
+      valid.push(row);
+    }
+    if (valid.length <= MAX_CONSUMED_KEYS) return;
+    const ordered = [...valid].sort((a, b) => a.at - b.at);
+    for (const row of ordered.slice(0, ordered.length - MAX_CONSUMED_KEYS)) {
+      try {
+        await deliveredStore.remove(row.key);
+      } catch {
+        // Keep pruning the rest; the next hydrate retries.
+      }
+    }
+  } catch {
+    // Storage unavailable: there is nothing to prune.
+  }
+}
+
 /** Takes with an intent on disk whose delivery has not been acknowledged yet. */
 const outboxInflight = new Set<string>();
 
@@ -244,6 +317,8 @@ async function clearOutbox(key: string): Promise<void> {
     throw new Error('the take intent would not clear');
   }
   outboxInflight.delete(key);
+  // Acked: even a stale row naming this id must never replay after restart.
+  rememberDelivered(key);
 }
 
 /** Forget an intent without failing when the take is gone either way. */
@@ -444,6 +519,31 @@ function hydrate(): Promise<void> {
       .list()
       .then(async (rows) => {
         if (!Array.isArray(rows)) rows = [];
+        // Delivered ids survive restarts: even a stale row or intent naming
+        // one must never queue again. Loaded first so every check below sees
+        // them. Claim-time `consumed` stays in-memory only — a take put back
+        // before it was shown is not delivered yet.
+        try {
+          const delivered = await deliveredStore.list();
+          const validDelivered: DeliveredRecord[] = [];
+          const deliveredQuarantine: string[] = [];
+          for (const row of Array.isArray(delivered) ? delivered : []) {
+            if (!isValidDeliveredRecord(row)) {
+              const key = (row as { key?: unknown } | null | undefined)?.key;
+              if (typeof key === 'string' && key.length > 0) deliveredQuarantine.push(key);
+              continue;
+            }
+            validDelivered.push(row);
+          }
+          if (deliveredQuarantine.length > 0) {
+            await Promise.all(deliveredQuarantine.map((key) => deliveredStore.remove(key).catch(() => {})));
+          }
+          validDelivered.sort((a, b) => a.at - b.at);
+          for (const row of validDelivered.slice(-MAX_CONSUMED_KEYS)) rememberConsumed(row.key);
+          void pruneDelivered(validDelivered);
+        } catch {
+          // Storage unavailable: the in-memory guard still holds this run.
+        }
         let outboxRows: HandoffRecord[] = [];
         try {
           const listed = await outboxStore.list();
@@ -1034,7 +1134,8 @@ function dropStolen(target: HandoffTarget, key: string): void {
     if (index >= 0) queue.splice(index, 1);
     if (queue.length === 0) pending.delete(target);
   }
-  rememberConsumed(key);
+  // Gone elsewhere: remember durably so a stale row naming it never replays.
+  rememberDelivered(key);
   clearFailed(key);
   dropOutbox(key);
   queuesChanged();
@@ -1182,7 +1283,7 @@ export async function discardHandoff(target: HandoffTarget, key: string): Promis
       // which case there is nothing left to take out of the queue.
       const current = pending.get(target);
       const index = current ? current.findIndex((entry) => entry.key === key) : -1;
-      rememberConsumed(key);
+      rememberDelivered(key);
       clearFailed(key);
       if (current && index >= 0) {
         current.splice(index, 1);
@@ -1271,7 +1372,7 @@ export async function discardHandoffQueue(target: HandoffTarget): Promise<number
     }
 
     if (cleared) {
-      rememberConsumed(key);
+      rememberDelivered(key);
       clearFailed(key);
       dropOutbox(key);
       gone += 1;

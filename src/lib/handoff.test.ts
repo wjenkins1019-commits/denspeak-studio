@@ -10,6 +10,7 @@ import {
   handoffFailures,
   returnTake,
   sendHandoff,
+  setHandoffDeliveredStore,
   setHandoffOutboxStore,
   setHandoffStore,
   setClearTimeout,
@@ -30,7 +31,7 @@ import {
   type HandoffItem,
   type HandoffTarget,
 } from './handoff';
-import type { HandoffRecord, HandoffStore } from './handoffStore';
+import type { DeliveredRecord, DeliveredStore, HandoffRecord, HandoffStore } from './handoffStore';
 import { orderListedRows } from './handoffStore';
 
 const item = { name: 'A take', blob: new Blob(['audio']), from: 'convert' as const };
@@ -252,23 +253,43 @@ class MemoryStore implements HandoffStore {
   }
 }
 
+class MemoryDeliveredStore implements DeliveredStore {
+  readonly rows = new Map<string, DeliveredRecord>();
+
+  async list(): Promise<DeliveredRecord[]> {
+    return [...this.rows.values()].sort((a, b) => a.at - b.at);
+  }
+
+  async put(record: DeliveredRecord): Promise<void> {
+    this.rows.set(record.key, record);
+  }
+
+  async remove(key: string): Promise<void> {
+    this.rows.delete(key);
+  }
+}
+
 describe('durable queue', () => {
   const store = new MemoryStore();
   const outbox = new MemoryStore();
+  const delivered = new MemoryDeliveredStore();
 
   beforeEach(() => {
     store.rows.clear();
     store.lists = 0;
     outbox.rows.clear();
     outbox.lists = 0;
+    delivered.rows.clear();
     setHandoffStore(store);
     setHandoffOutboxStore(outbox);
+    setHandoffDeliveredStore(delivered);
     clearHandoff();
   });
 
   afterEach(() => {
     setHandoffStore(null);
     setHandoffOutboxStore(null);
+    setHandoffDeliveredStore(null);
     clearHandoff();
   });
 
@@ -1427,5 +1448,102 @@ describe('durable queue', () => {
     await hydrateHandoff();
     expect(pendingCount('convert')).toBe(0);
     expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('never replays a delivered take after restart, even when its row comes back', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    const [queued] = queuedTakes('convert');
+    const key = queued.key;
+
+    // Clean delivery: the row goes, the ack clears the intent and remembers
+    // the id durably. Flush so the delivered put lands before the restart.
+    expect(await takeHandoff('convert')).toEqual(item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(0);
+    expect(outbox.rows.size).toBe(0);
+    expect(delivered.rows.has(key)).toBe(true);
+
+    // A stale writer puts the same row and intent back after the ack — a
+    // second tab's late put, or a disk that kept the bytes. A restart must
+    // still deliver nothing: exactly once, with the first delivery as the one.
+    store.rows.set(key, { key, target: 'convert', at: Date.now(), item });
+    outbox.rows.set(key, { key, target: 'convert', at: Date.now(), item });
+
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('still replays a take whose ack never landed', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(1);
+
+    // The row goes but the ack refuses: delivered but not durably
+    // remembered, so the next run must replay instead of losing the take.
+    const removeOutbox = outbox.remove.bind(outbox);
+    outbox.remove = vi.fn(async () => {
+      throw new Error('intent would not clear');
+    });
+    try {
+      expect(await takeHandoff('convert')).toEqual(item);
+      await flushHandoffWrites();
+    } finally {
+      outbox.remove = removeOutbox;
+    }
+    expect(pendingCount('convert')).toBe(0);
+    expect(delivered.rows.size).toBe(0);
+
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    expect(pendingCount('convert')).toBe(1);
+    expect(await takeHandoff('convert')).toEqual(item);
+    await flushHandoffWrites();
+    expect(delivered.rows.size).toBe(1);
+  });
+
+  it('remembers a claimHandoff ack across restarts', async () => {
+    sendHandoff('convert', item);
+    await flushHandoffWrites();
+    const [queued] = queuedTakes('convert');
+    const key = queued.key;
+
+    const claim = await claimHandoff('convert');
+    expect(claim.status).toBe('taken');
+    if (claim.status !== 'taken') return;
+    await claim.acknowledge();
+    await flushHandoffWrites();
+    expect(delivered.rows.has(key)).toBe(true);
+
+    // Stale bytes for the same id after the ack must not replay.
+    store.rows.set(key, { key, target: 'convert', at: Date.now(), item });
+    outbox.rows.set(key, { key, target: 'convert', at: Date.now(), item });
+
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    expect(pendingCount('convert')).toBe(0);
+    expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('bounds delivered ids newest-first', async () => {
+    const base = Date.now();
+    for (let index = 0; index < 505; index += 1) {
+      await delivered.put({ key: `delivered-${index}`, at: base + index });
+    }
+    expect(delivered.rows.size).toBe(505);
+
+    // A reload loads the newest ids and prunes the rest, so the set cannot
+    // grow with the session.
+    clearHandoff();
+    await hydrateHandoff();
+    await flushHandoffWrites();
+    await vi.waitFor(() => expect(delivered.rows.size).toBe(500));
+    expect(delivered.rows.has('delivered-0')).toBe(false);
+    expect(delivered.rows.has('delivered-504')).toBe(true);
   });
 });

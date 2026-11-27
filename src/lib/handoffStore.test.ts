@@ -17,6 +17,7 @@ import {
 } from './handoff';
 import {
   __closeHandoffDbForTests,
+  indexedDbHandoffDeliveredStore,
   indexedDbHandoffOutboxStore,
   indexedDbHandoffStore,
 } from './handoffStore';
@@ -44,6 +45,9 @@ describe('indexeddb v1 to v2 upgrade', () => {
     }
     for (const row of await indexedDbHandoffOutboxStore.list()) {
       await indexedDbHandoffOutboxStore.remove(row.key);
+    }
+    for (const row of await indexedDbHandoffDeliveredStore.list()) {
+      await indexedDbHandoffDeliveredStore.remove(row.key);
     }
     await __closeHandoffDbForTests();
   });
@@ -97,8 +101,8 @@ describe('indexeddb v1 to v2 upgrade', () => {
       request.onblocked = () => reject(new Error('Could not open the v1 hand-off database: blocked'));
     });
 
-    // Opening through the app upgrades to v2: the pending row survives and
-    // the new outbox store exists and starts empty.
+    // Opening through the app upgrades to v3: the pending row survives and
+    // the new outbox and delivered stores exist and start empty.
     const listed = await indexedDbHandoffStore.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ key: pending.key, target: pending.target });
@@ -118,8 +122,82 @@ describe('indexeddb v1 to v2 upgrade', () => {
     await indexedDbHandoffOutboxStore.remove(intent.key);
     expect(await indexedDbHandoffOutboxStore.list()).toEqual([]);
 
+    // The upgraded database really has a writable delivered store.
+    await indexedDbHandoffDeliveredStore.put({ key: 'upgrade-delivered-1', at: Date.now() });
+    expect((await indexedDbHandoffDeliveredStore.list()).map((row) => row.key)).toEqual([
+      'upgrade-delivered-1',
+    ]);
+    await indexedDbHandoffDeliveredStore.remove('upgrade-delivered-1');
+    expect(await indexedDbHandoffDeliveredStore.list()).toEqual([]);
+
     // The v1 take is still there afterwards, not upgraded away.
     expect((await indexedDbHandoffStore.list()).map((row) => row.key)).toEqual([pending.key]);
+  });
+
+  it('creates the delivered store without losing v2 pending rows and intents', async () => {
+    const pendingV2: HandoffRecord = {
+      key: 'upgrade-pending-v2',
+      target: 'convert',
+      at: Date.now(),
+      item: { name: 'V2 take', blob: new Blob(['v2']) },
+    };
+    const intentV2: HandoffRecord = {
+      key: 'upgrade-intent-v2',
+      target: 'convert',
+      at: Date.now(),
+      item: { name: 'V2 intent', blob: new Blob(['v2-intent']) },
+    };
+
+    // Start closed, drop whatever the v1 test left, and build a v2 database
+    // with pending and outbox but no delivered store.
+    await __closeHandoffDbForTests();
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('chatter-box-handoff');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error ?? new Error('Could not delete the hand-off database'));
+      request.onblocked = () => reject(new Error('Could not delete the hand-off database: blocked'));
+    });
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('chatter-box-handoff', 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('pending')) db.createObjectStore('pending', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'key' });
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        const done = () => {
+          try {
+            db.close();
+          } catch {
+            // Already closed: the v3 open below still starts fresh.
+          }
+          resolve();
+        };
+        try {
+          const tx = db.transaction(['pending', 'outbox'], 'readwrite');
+          tx.objectStore('pending').put(pendingV2);
+          tx.objectStore('outbox').put(intentV2);
+          tx.oncomplete = () => done();
+          tx.onerror = () => reject(tx.error ?? new Error('Could not seed the v2 rows'));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      request.onerror = () => reject(request.error ?? new Error('Could not open the v2 hand-off database'));
+      request.onblocked = () => reject(new Error('Could not open the v2 hand-off database: blocked'));
+    });
+
+    // Opening through the app upgrades to v3: both v2 rows survive and the
+    // delivered store exists empty and writable.
+    expect((await indexedDbHandoffStore.list()).map((row) => row.key)).toEqual([pendingV2.key]);
+    expect((await indexedDbHandoffOutboxStore.list()).map((row) => row.key)).toEqual([intentV2.key]);
+    expect(await indexedDbHandoffDeliveredStore.list()).toEqual([]);
+
+    await indexedDbHandoffDeliveredStore.put({ key: 'upgrade-delivered-v3', at: Date.now() });
+    expect((await indexedDbHandoffDeliveredStore.list()).map((row) => row.key)).toEqual([
+      'upgrade-delivered-v3',
+    ]);
   });
 });
 
@@ -130,6 +208,12 @@ describe('indexeddb blob round-trip', () => {
     clearHandoff();
     for (const row of await indexedDbHandoffStore.list()) {
       await indexedDbHandoffStore.remove(row.key);
+    }
+    for (const row of await indexedDbHandoffOutboxStore.list()) {
+      await indexedDbHandoffOutboxStore.remove(row.key);
+    }
+    for (const row of await indexedDbHandoffDeliveredStore.list()) {
+      await indexedDbHandoffDeliveredStore.remove(row.key);
     }
   });
 

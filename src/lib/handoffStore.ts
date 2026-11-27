@@ -26,10 +26,27 @@ export interface HandoffStore {
 }
 
 const DB_NAME = 'chatter-box-handoff';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'pending';
 /** In-flight takes: written before the main row is deleted, held until after the delivery ack. */
 const OUTBOX_STORE = 'outbox';
+/** Take ids already delivered, so a later hydrate never replays them. */
+const DELIVERED_STORE = 'delivered';
+
+export interface DeliveredRecord {
+  /** Row id of a take that was delivered and acked. */
+  key: string;
+  /** When it was delivered, so the set stays bounded newest-first. */
+  at: number;
+}
+
+/** What `handoff.ts` needs to remember deliveries across restarts. */
+
+export interface DeliveredStore {
+  list(): Promise<DeliveredRecord[]>;
+  put(record: DeliveredRecord): Promise<void>;
+  remove(key: string): Promise<void>;
+}
 
 /**
  * Entries read back may include values no section wrote. Drop what cannot be
@@ -75,6 +92,8 @@ function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'key' });
       if (!db.objectStoreNames.contains(OUTBOX_STORE)) db.createObjectStore(OUTBOX_STORE, { keyPath: 'key' });
+      if (!db.objectStoreNames.contains(DELIVERED_STORE))
+        db.createObjectStore(DELIVERED_STORE, { keyPath: 'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('Could not open the hand-off store'));
@@ -169,5 +188,47 @@ export const indexedDbHandoffOutboxStore: HandoffStore = {
     // risking a replayed duplicate on the next run.
     const db = await openDb();
     await requestToPromise(db.transaction(OUTBOX_STORE, 'readwrite').objectStore(OUTBOX_STORE).delete(key));
+  },
+};
+
+/**
+ * Delivered take ids, written only after the delivery ack: a crash before the
+ * ack replays from the outbox (at-least-once), a restart after the ack finds
+ * the id here and never replays even a stale row that still names it
+ * (exactly-once). Best-effort like the outbox: when it will not take the id
+ * the in-memory guard still holds for this run.
+ */
+export const indexedDbHandoffDeliveredStore: DeliveredStore = {
+  async list(): Promise<DeliveredRecord[]> {
+    if (!hasDatabase()) return [];
+    try {
+      const db = await openDb();
+      const rows = await requestToPromise(
+        db.transaction(DELIVERED_STORE, 'readonly').objectStore(DELIVERED_STORE).getAll() as IDBRequest<
+          DeliveredRecord[]
+        >,
+      );
+      return (Array.isArray(rows) ? rows : [])
+        .filter((row) => !!row && typeof row === 'object')
+        .sort((a, b) => (typeof a.at === 'number' ? a.at : 0) - (typeof b.at === 'number' ? b.at : 0));
+    } catch {
+      return [];
+    }
+  },
+
+  async put(record: DeliveredRecord): Promise<void> {
+    if (!hasDatabase()) throw new Error('Hand-off delivered store unavailable');
+    const db = await openDb();
+    await requestToPromise(
+      db.transaction(DELIVERED_STORE, 'readwrite').objectStore(DELIVERED_STORE).put(record),
+    );
+  },
+
+  async remove(key: string): Promise<void> {
+    if (!hasDatabase()) return;
+    const db = await openDb();
+    await requestToPromise(
+      db.transaction(DELIVERED_STORE, 'readwrite').objectStore(DELIVERED_STORE).delete(key),
+    );
   },
 };
