@@ -10,6 +10,9 @@ import {
   handoffFailures,
   returnTake,
   sendHandoff,
+  handoffStorageStatus,
+  isHandoffStorageDegraded,
+  retryHandoffPersistence,
   setHandoffDeliveredStore,
   setHandoffOutboxStore,
   setHandoffStore,
@@ -1431,6 +1434,122 @@ describe('durable queue', () => {
     await hydrateHandoff();
     expect(pendingCount('convert')).toBe(0);
     expect(await takeHandoff('convert')).toBeNull();
+  });
+
+  it('surfaces quota memory-only fallback as degraded with an unstored count', async () => {
+    expect(isHandoffStorageDegraded()).toBe(false);
+    expect(handoffStorageStatus()).toMatchObject({ degraded: false, unstored: 0, evicted: 0 });
+
+    const quota = () => {
+      const fallback = new Error('Quota exceeded');
+      fallback.name = 'QuotaExceededError';
+      return fallback;
+    };
+    const put = store.put.bind(store);
+    store.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      // Visible, not silent: the take is queued without a row.
+      expect(isHandoffStorageDegraded()).toBe(true);
+      expect(handoffStorageStatus()).toMatchObject({ degraded: true, unstored: 1, evicted: 0 });
+      expect(handoffDiagnostics()).toMatchObject({ queued: 1, unstored: 1, storageDegraded: true });
+      expect(pendingCount('convert')).toBe(1);
+    } finally {
+      store.put = put;
+    }
+  });
+
+  it('evicts the oldest memory-only takes beyond the section cap, newest kept', async () => {
+    const quota = () => {
+      const fallback = new Error('Quota exceeded');
+      fallback.name = 'QuotaExceededError';
+      return fallback;
+    };
+    const put = store.put.bind(store);
+    store.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      const total = HANDOFF_MAX_STORED + 3;
+      for (let index = 0; index < total; index += 1) {
+        sendHandoff('convert', { ...item, name: `Memory take ${index}` });
+      }
+      await flushHandoffWrites();
+
+      // Same caps as stored takes: the oldest memory-only takes go, the
+      // just-sent newest is always kept.
+      expect(pendingCount('convert')).toBe(HANDOFF_MAX_STORED);
+      expect(handoffStorageStatus()).toMatchObject({
+        degraded: true,
+        unstored: HANDOFF_MAX_STORED,
+        evicted: 3,
+      });
+      const names = queuedTakes('convert').map((take) => take.name);
+      expect(names).not.toContain('Memory take 0');
+      expect(names[names.length - 1]).toBe(`Memory take ${total - 1}`);
+    } finally {
+      store.put = put;
+    }
+  });
+
+  it('retries memory-only takes when space frees and clears degraded', async () => {
+    const quota = () => {
+      const fallback = new Error('Quota exceeded');
+      fallback.name = 'QuotaExceededError';
+      return fallback;
+    };
+    const put = store.put.bind(store);
+    store.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      sendHandoff('convert', { ...item, name: 'First memory take' });
+      sendHandoff('convert', { ...item, name: 'Second memory take' });
+      await flushHandoffWrites();
+      expect(store.rows.size).toBe(0);
+      expect(isHandoffStorageDegraded()).toBe(true);
+    } finally {
+      store.put = put;
+    }
+
+    // Space frees: the retry lands both, clears degraded, and a reload
+    // brings them back instead of losing them.
+    expect(await retryHandoffPersistence()).toBe(2);
+    await flushHandoffWrites();
+    expect(store.rows.size).toBe(2);
+    expect(isHandoffStorageDegraded()).toBe(false);
+    expect(handoffStorageStatus()).toMatchObject({ degraded: false, unstored: 0 });
+    expect(handoffDiagnostics()).toMatchObject({ storageDegraded: false, unstored: 0 });
+
+    clearHandoff();
+    await hydrateHandoff();
+    expect(pendingCount('convert')).toBe(2);
+    expect(await takeHandoff('convert')).toMatchObject({ name: 'First memory take' });
+    await flushHandoffWrites();
+  });
+
+  it('reports a retry that lands nothing while the disk is still full', async () => {
+    const quota = () => {
+      const fallback = new Error('Quota exceeded');
+      fallback.name = 'QuotaExceededError';
+      return fallback;
+    };
+    const put = store.put.bind(store);
+    store.put = vi.fn(async () => {
+      throw quota();
+    });
+    try {
+      sendHandoff('convert', item);
+      await flushHandoffWrites();
+      expect(await retryHandoffPersistence()).toBe(0);
+      expect(isHandoffStorageDegraded()).toBe(true);
+      expect(pendingCount('convert')).toBe(1);
+    } finally {
+      store.put = put;
+    }
   });
 
   it('never resurrects a discarded take from a stale intent', async () => {

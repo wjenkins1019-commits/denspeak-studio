@@ -22,6 +22,11 @@ export function QueuePanel({
   note,
   busy,
   failures,
+  storageDegraded,
+  unstored,
+  evicted,
+  retryingStorage,
+  onRetryStorage,
   onDiscard,
   onClear,
   onOpen,
@@ -39,6 +44,16 @@ export function QueuePanel({
    * nowhere.
    */
   busy: QueueBusy;
+  /** The disk refused takes with QuotaExceededError; they are memory-only. */
+  storageDegraded?: boolean;
+  /** How many queued takes never reached the disk. */
+  unstored?: number;
+  /** Memory-only takes dropped by eviction, oldest first. */
+  evicted?: number;
+  /** A persistence retry is running. */
+  retryingStorage?: boolean;
+  /** Try landing the memory-only takes again, now that space may be free. */
+  onRetryStorage?: () => void;
   onDiscard: (key: string) => void;
   onClear: () => void;
   onOpen: () => void;
@@ -67,10 +82,31 @@ export function QueuePanel({
     .filter(Boolean)
     .join('. ');
   // The one line the panel says out loud, most urgent first: a refusal stands
-  // until the next request clears it, work under way is next, and the empty
-  // result last. One string in one region, so a refusal cannot land on top of
-  // "Clearing 2 takes." and have a reader hear both at once.
-  const news = note ?? (working ? `${working}.` : empty ? 'Nothing queued now.' : '');
+  // until the next request clears it, then the storage-full warning, then work
+  // under way, and the empty result last. One string in one region, so a
+  // refusal cannot land on top of "Clearing 2 takes." and have a reader hear
+  // both at once.
+  const unstoredCount = unstored ?? 0;
+  const evictedCount = evicted ?? 0;
+  let storageNews = '';
+  if (storageDegraded && unstoredCount > 0) {
+    storageNews =
+      unstoredCount === 1
+        ? 'Storage is full — 1 take is kept in memory only and will not survive a reload.'
+        : `Storage is full — ${unstoredCount} takes are kept in memory only and will not survive a reload.`;
+    if (evictedCount > 0) {
+      storageNews +=
+        evictedCount === 1
+          ? ' 1 oldest take was dropped to make room.'
+          : ` ${evictedCount} oldest takes were dropped to make room.`;
+    }
+  }
+  let news = '';
+  if (note) news = note;
+  else if (storageNews) news = `${storageNews} Free space, then retry saving.`;
+  else if (working) news = `${working}.`;
+  else if (empty) news = 'Nothing queued now.';
+  const showRetryStorage = storageDegraded && onRetryStorage !== undefined;
 
   useEffect(() => {
     heading.current?.focus();
@@ -213,6 +249,11 @@ export function QueuePanel({
           <button className="btn ghost small" onClick={onOpen}>
             Open {label}
           </button>
+          {showRetryStorage && (
+            <button className="btn ghost small" onClick={onRetryStorage} disabled={retryingStorage}>
+              {retryingStorage ? 'Retrying…' : 'Retry saving'}
+            </button>
+          )}
           {takes.length > 0 && (
             <button
               className="btn ghost small danger"

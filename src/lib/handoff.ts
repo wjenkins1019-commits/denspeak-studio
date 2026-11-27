@@ -112,7 +112,87 @@ export function subscribeQueues(listener: QueueListener): () => void {
 }
 
 function queuesChanged(): void {
+  syncQuotaDegraded();
   for (const listener of [...queueListeners]) listener();
+}
+
+/**
+ * Whether `error` is a storage-full refusal. Name-based, so the in-memory
+ * test doubles can raise it with a plain Error when DOMException is missing.
+ */
+function isQuotaError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  if (candidate.name === 'QuotaExceededError') return true;
+  // DOMException.QUOTA_EXCEEDED_ERR.
+  if (candidate.code === 22) return true;
+  return false;
+}
+
+/**
+ * Memory-only fallback state: the disk refused a take with QuotaExceededError,
+ * so takes are queued without rows until a retry lands them. Visible through
+ * `handoffStorageStatus`, capped by eviction, cleared once nothing
+ * quota-failed is still queued or a retry persists it all.
+ */
+let storageDegraded = false;
+let storageDegradedAt = 0;
+/** Memory-only takes dropped by eviction, oldest first, newest kept. */
+let evictedMemoryOnly = 0;
+
+function hasQuotaFailed(): boolean {
+  for (const queue of pending.values()) {
+    for (const entry of queue) {
+      if (entry.quotaFailed && !entry.stored) return true;
+    }
+  }
+  return false;
+}
+
+function markQuotaDegraded(): void {
+  if (!storageDegraded) {
+    storageDegraded = true;
+    storageDegradedAt = Date.now();
+  }
+}
+
+/** Clear the degraded flag once nothing quota-failed is queued anymore. */
+function syncQuotaDegraded(): void {
+  if (storageDegraded && !hasQuotaFailed()) storageDegraded = false;
+}
+
+function onPersistSuccess(entry: Pending): void {
+  entry.stored = true;
+  entry.quotaFailed = false;
+  if (storageDegraded && !hasQuotaFailed()) storageDegraded = false;
+  // Space freed: opportunistically land the other memory-only takes.
+  if (storageDegraded) void retryHandoffPersistence().catch(() => {});
+}
+
+function onQuotaFailed(target: HandoffTarget, entry: Pending): void {
+  entry.quotaFailed = true;
+  markQuotaDegraded();
+  evictQuotaFailed(target);
+  queuesChanged();
+}
+
+/**
+ * Cap memory-only takes per section at the same limit as stored takes:
+ * without the disk, an unbounded queue is a leak, and the oldest unsent
+ * audio is what goes — the just-sent take is newest, so it is always kept.
+ */
+function evictQuotaFailed(target: HandoffTarget): void {
+  const queue = pending.get(target);
+  if (!queue) return;
+  const failed = queue.filter((entry) => entry.quotaFailed && !entry.stored);
+  if (failed.length <= HANDOFF_MAX_STORED) return;
+  for (const entry of failed.slice(0, failed.length - HANDOFF_MAX_STORED)) {
+    const index = queue.indexOf(entry);
+    if (index >= 0) queue.splice(index, 1);
+    clearFailed(entry.key);
+    evictedMemoryOnly += 1;
+  }
+  if (queue.length === 0) pending.delete(target);
 }
 
 interface Pending {
@@ -136,6 +216,13 @@ interface Pending {
    * lands the row missing proves nothing, so the take is claimed as before.
    */
   stored: boolean;
+  /**
+   * Whether a put for this take refused with QuotaExceededError: the take is
+   * memory-only until a retry lands it. Distinguishes quota-failed takes
+   * from takes whose puts are merely in flight, so the eviction cap and the
+   * retry pass only touch takes that actually missed the disk.
+   */
+  quotaFailed?: boolean;
 }
 
 /**
@@ -356,6 +443,76 @@ function queuePut(key: string, put: () => Promise<void>, after?: () => Promise<v
   void tracked.then(() => {
     pendingWork.delete(tracked);
   });
+}
+
+/**
+ * Try to land every memory-only take the disk refused with QuotaExceededError.
+ * Each attempt goes through the per-key `queuePut` chain, so a take claimed
+ * while the retry runs still deletes its restored row first instead of
+ * orphaning one. Answers how many takes landed. Clears the degraded flag
+ * when nothing memory-only is left; a still-full disk keeps it set.
+ */
+export async function retryHandoffPersistence(): Promise<number> {
+  const candidates: Array<{ target: HandoffTarget; entry: Pending }> = [];
+  for (const [target, queue] of pending) {
+    for (const entry of queue) {
+      if (entry.quotaFailed && !entry.stored) candidates.push({ target, entry });
+    }
+  }
+  if (candidates.length === 0) {
+    syncQuotaDegraded();
+    return 0;
+  }
+  let persisted = 0;
+  for (const { target, entry } of candidates) {
+    if (!pending.get(target)?.includes(entry)) continue;
+    queuePut(
+      entry.key,
+      () =>
+        store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(
+          () => {
+            entry.stored = true;
+            entry.quotaFailed = false;
+            persisted += 1;
+          },
+          (error: unknown) => {
+            if (isQuotaError(error)) onQuotaFailed(target, entry);
+            throw error;
+          },
+        ),
+      () => pruneStored(),
+    );
+  }
+  await flushHandoffWrites();
+  if (!hasQuotaFailed()) storageDegraded = false;
+  queuesChanged();
+  return persisted;
+}
+
+/** Whether takes are queued memory-only after a quota refusal. */
+export function isHandoffStorageDegraded(): boolean {
+  return storageDegraded;
+}
+
+/** Degraded flag plus memory-only counts, for the queue panel and the rail. */
+export function handoffStorageStatus(): {
+  degraded: boolean;
+  unstored: number;
+  evicted: number;
+  since: number | null;
+} {
+  let unstored = 0;
+  for (const queue of pending.values()) {
+    for (const entry of queue) {
+      if (entry.quotaFailed && !entry.stored) unstored += 1;
+    }
+  }
+  return {
+    degraded: storageDegraded,
+    unstored,
+    evicted: evictedMemoryOnly,
+    since: storageDegraded ? storageDegradedAt : null,
+  };
 }
 
 /**
@@ -639,6 +796,7 @@ function hydrate(): Promise<void> {
           // verifies inside the lock like any hydrated take.
           let winner = false;
           let restored = false;
+          let quotaFailedReplay = false;
           try {
             winner = await withClaimLock(row.key, async () => {
               if (consumed.has(row.key) || queuedKeys.has(row.key)) return false;
@@ -659,12 +817,16 @@ function hydrate(): Promise<void> {
               try {
                 await store.put({ key: row.key, target: row.target, at: row.at, item: row.item });
                 restored = true;
-              } catch {
+              } catch (error) {
                 // Disk will not take the row: queue memory-only below and let
                 // the claim fall back to delete-before-handover. Concurrent
                 // restarts under quota can still double-deliver; the alternative
                 // is dropping the take in both tabs.
                 restored = false;
+                if (isQuotaError(error)) {
+                  markQuotaDegraded();
+                  quotaFailedReplay = true;
+                }
               }
               return true;
             });
@@ -680,17 +842,25 @@ function hydrate(): Promise<void> {
             at: row.at,
             hydrated: true,
             stored: restored,
+            quotaFailed: quotaFailedReplay || undefined,
           };
           const list = replayed.get(row.target) ?? [];
           list.unshift(entry);
           replayed.set(row.target, list);
+          if (quotaFailedReplay) evictQuotaFailed(row.target);
           if (!restored) {
             // Memory-only fallback: retry the restore so a later claim still
             // deletes a landed row first instead of orphaning one.
             queuePut(row.key, () =>
-              store.put({ key: row.key, target: row.target, at: row.at, item: row.item }).then(() => {
-                entry.stored = true;
-              }),
+              store.put({ key: row.key, target: row.target, at: row.at, item: row.item }).then(
+                () => {
+                  onPersistSuccess(entry);
+                },
+                (error: unknown) => {
+                  if (isQuotaError(error)) onQuotaFailed(row.target, entry);
+                  throw error;
+                },
+              ),
             );
           }
         }
@@ -759,13 +929,20 @@ export function sendHandoff(target: HandoffTarget, item: HandoffItem): void {
   // Written, then pruned: a section nobody opens must not collect takes on disk
   // for ever. The take counts as stored only once its put lands — only then
   // can a missing row mean another tab claimed it rather than this tab's
-  // write queue not having caught up yet.
+  // write queue not having caught up yet. A quota refusal keeps the take
+  // queued memory-only, visible and capped, until a retry lands it.
   queuePut(
     key,
     () =>
-      store.put({ key, target, at, item }).then(() => {
-        entry.stored = true;
-      }),
+      store.put({ key, target, at, item }).then(
+        () => {
+          onPersistSuccess(entry);
+        },
+        (error: unknown) => {
+          if (isQuotaError(error)) onQuotaFailed(target, entry);
+          throw error;
+        },
+      ),
     () => pruneStored(),
   );
 }
@@ -1202,9 +1379,15 @@ function putBackHandoff(target: HandoffTarget, entry: Pending): void {
   entry.stored = false;
   void writeOutbox(target, entry);
   queuePut(entry.key, () =>
-    store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(() => {
-      entry.stored = true;
-    }),
+    store.put({ key: entry.key, target, at: entry.at, item: entry.item }).then(
+      () => {
+        onPersistSuccess(entry);
+      },
+      (error: unknown) => {
+        if (isQuotaError(error)) onQuotaFailed(target, entry);
+        throw error;
+      },
+    ),
   );
 }
 
@@ -1488,6 +1671,9 @@ export function clearHandoff(): void {
   hydration = null;
   putTails.clear();
   pendingWork.clear();
+  storageDegraded = false;
+  storageDegradedAt = 0;
+  evictedMemoryOnly = 0;
   queuesChanged();
 }
 
@@ -1519,9 +1705,17 @@ export function handoffDiagnostics(): {
   pendingWrites: number;
   pendingKeys: number;
   outbox: number;
+  unstored: number;
+  storageDegraded: boolean;
 } {
   let queued = 0;
-  for (const queue of pending.values()) queued += queue.length;
+  let unstored = 0;
+  for (const queue of pending.values()) {
+    queued += queue.length;
+    for (const entry of queue) {
+      if (entry.quotaFailed && !entry.stored) unstored += 1;
+    }
+  }
   return {
     queued,
     failed: failedTakes.size,
@@ -1529,5 +1723,7 @@ export function handoffDiagnostics(): {
     pendingWrites: pendingWork.size,
     pendingKeys: putTails.size,
     outbox: outboxInflight.size,
+    unstored,
+    storageDegraded,
   };
 }

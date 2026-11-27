@@ -6,10 +6,12 @@ import {
   discardHandoffQueue,
   handoffFailures,
   isHandoffRoute,
+  isHandoffStorageDegraded,
   queuedTakes,
+  retryHandoffPersistence,
   type HandoffTarget,
 } from './lib/handoff';
-import { useFailedCounts, usePendingCounts } from './lib/useHandoffTake';
+import { useFailedCounts, useHandoffStorageStatus, usePendingCounts } from './lib/useHandoffTake';
 import { waitingAnnouncement, waitingFell } from './lib/waitingAnnouncement';
 import { VOICES, VOICES_BY_ID } from './voices';
 import { LogoMark } from './components/Logo';
@@ -68,6 +70,10 @@ export default function App() {
   // Takes still queued after a failed open, so the rail can say which count
   // needs another try instead of just waiting.
   const failedBySection = useFailedCounts();
+  // Takes the disk refused with QuotaExceededError: memory-only, capped, and
+  // retryable once space frees. The panel says so; the rail names it.
+  const storageStatus = useHandoffStorageStatus();
+  const [retryingStorage, setRetryingStorage] = useState(false);
   const activeJob = useMemo(() => getActiveJob(), [queueTick]);
   const [voiceId, setVoiceId] = useSetting<string>(SETTING_KEYS.voice, DEFAULT_VOICE);
   const [speed, setSpeed] = useSetting<number>(SETTING_KEYS.speed, 1);
@@ -197,6 +203,19 @@ export default function App() {
     navigate(target);
   }, [closeQueue, navigate, queuePanel]);
 
+  const retryStorage = useCallback(async () => {
+    if (retryingStorage) return;
+    setRetryingStorage(true);
+    try {
+      const persisted = await retryHandoffPersistence();
+      if (persisted === 0 && isHandoffStorageDegraded()) {
+        setQueueNote('Storage is still full — free space, then try again.');
+      }
+    } finally {
+      setRetryingStorage(false);
+    }
+  }, [retryingStorage]);
+
   const voice = VOICES_BY_ID.get(voiceId);
 
   return (
@@ -228,6 +247,8 @@ export default function App() {
             const stuck = target ? (failedBySection[target] ?? 0) : 0;
             const takes = waiting === 1 ? '1 take' : `${waiting} takes`;
             const retrySuffix = stuck > 0 ? `, ${stuck} ${stuck === 1 ? 'needs' : 'need'} retry` : '';
+            const storageSuffix =
+              storageStatus.degraded && waiting > 0 ? ', storage full, kept in memory' : '';
 
             return (
               <div className="nav-item-wrap" key={item.id}>
@@ -246,8 +267,8 @@ export default function App() {
                     className="nav-count"
                     aria-haspopup="dialog"
                     aria-expanded={queuePanel === target}
-                    aria-label={`${takes} waiting for ${item.label}${retrySuffix}. Review the queue`}
-                    title={`Review the ${takes} waiting for ${item.label}${retrySuffix}`}
+                    aria-label={`${takes} waiting for ${item.label}${retrySuffix}${storageSuffix}. Review the queue`}
+                    title={`Review the ${takes} waiting for ${item.label}${retrySuffix}${storageSuffix}`}
                     onClick={(event) => openQueue(target, event.currentTarget)}
                   >
                     {waiting}
@@ -317,6 +338,11 @@ export default function App() {
           takes={queuedTakes(queuePanel)}
           note={queueNote}
           busy={queueBusy}
+          storageDegraded={storageStatus.degraded}
+          unstored={storageStatus.unstored}
+          evicted={storageStatus.evicted}
+          retryingStorage={retryingStorage}
+          onRetryStorage={retryStorage}
           failures={handoffFailures(queuePanel).map(({ key, attempts }) => ({ key, attempts }))}
           onDiscard={discardQueued}
           onClear={clearQueued}

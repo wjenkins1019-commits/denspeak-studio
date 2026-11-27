@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   claimHandoff,
   handoffFailures,
+  handoffStorageStatus,
   hydrateHandoff,
   pendingCount,
   pendingCounts,
@@ -252,6 +253,23 @@ export function useFailedCounts(): Partial<Record<HandoffTarget, number>> {
   }, []);
 
   return counts;
+}
+
+/**
+ * Whether takes are queued memory-only after a quota refusal, with counts —
+ * for the rail and the queue panel. The disk refused the put, so the take
+ * survives this session only; a retry lands it once space frees.
+ */
+export function useHandoffStorageStatus(): {
+  degraded: boolean;
+  unstored: number;
+  evicted: number;
+} {
+  const [status, setStatus] = useState(() => handoffStorageStatus());
+
+  useEffect(() => subscribeQueues(() => setStatus(handoffStorageStatus())), []);
+
+  return status;
 }
 
 /** Takes still queued after a failed open, for one section's panel. */
