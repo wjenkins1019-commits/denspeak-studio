@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hand-off two-context race</title>
+    <style>
+      body { font-family: monospace; padding: 16px; background: #0b0b0b; color: #e8e8e8; }
+      #race-result { white-space: pre-wrap; }
+      .pass { color: #7dffa8; }
+      .fail { color: #ff8a8a; }
+    </style>
+  </head>
+  <body>
+    <div id="race-result">starting…</div>
+    <script type="module">
+      // Real two-context race for the hand-off queue: the parent below spawns
+      // two same-origin iframes (?mode=runner&role=A/B). Each iframe is its
+      // own JS realm with its own handoff module instance — like two tabs —
+      // sharing the real IndexedDB and the real navigator.locks of this
+      // origin. No fake-indexeddb, no module mock.
+      //
+      // Run: npx vite --port 5173, then open /handoff-race.html in Chromium.
+      // Phase 1 races drain across both contexts; phase 2 crashes between
+      // delete and ack, then races hydrate+replay across both contexts.
+      // Exactly-once holds only if hydrate replay serializes on the
+      // per-take Web Lock (see handoff.ts).
+
+      const params = new URLSearchParams(location.search);
+      const mode = params.get('mode') ?? 'parent';
+
+      if (mode === 'runner') {
+        const role = params.get('role') ?? '?';
+        const handoff = await import('/src/lib/handoff.ts');
+        const storeMod = await import('/src/lib/handoffStore.ts');
+
+        async function clean() {
+          handoff.clearHandoff();
+          for (const row of await storeMod.indexedDbHandoffStore.list()) {
+            await storeMod.indexedDbHandoffStore.remove(row.key);
+          }
+          for (const row of await storeMod.indexedDbHandoffOutboxStore.list()) {
+            await storeMod.indexedDbHandoffOutboxStore.remove(row.key);
+          }
+          for (const row of await storeMod.indexedDbHandoffDeliveredStore.list()) {
+            await storeMod.indexedDbHandoffDeliveredStore.remove(row.key);
+          }
+          handoff.clearHandoff();
+          await storeMod.__closeHandoffDbForTests();
+        }
+
+        async function drain() {
+          // takeHandoff returns null for both empty and failed claims, so a
+          // null with takes still pending is retried like the UI retry does.
+          const got = [];
+          let retries = 0;
+          for (;;) {
+            const taken = await handoff.takeHandoff('convert');
+            if (taken) {
+              got.push(taken.name);
+              continue;
+            }
+            if (handoff.pendingCount('convert') === 0) break;
+            retries += 1;
+            if (retries > 25) break;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          await handoff.flushHandoffWrites();
+          return { got, retries, pending: handoff.pendingCount('convert') };
+        }
+
+        const commands = {
+          clean,
+          async send(names) {
+            for (const name of names) {
+              handoff.sendHandoff('convert', { name, blob: new Blob([`race-audio-${name}`]), from: 'studio' });
+            }
+            await handoff.flushHandoffWrites();
+            return { sent: names.length };
+          },
+          async hydrate() {
+            // Fresh restart: memory is gone, the database is not.
+            handoff.clearHandoff();
+            await handoff.hydrateHandoff();
+            await handoff.flushHandoffWrites();
+            return { pending: handoff.pendingCount('convert') };
+          },
+          drain,
+          async claimCrash() {
+            // Claim and vanish without ack or release: the main row is
+            // deleted, the outbox intent survives — the crash window.
+            handoff.clearHandoff();
+            await handoff.hydrateHandoff();
+            const claim = await handoff.claimHandoff('convert');
+            const status = claim.status;
+            handoff.clearHandoff();
+            return { status };
+          },
+          async takeOne() {
+            const taken = await handoff.takeHandoff('convert');
+            await handoff.flushHandoffWrites();
+            return { name: taken ? taken.name : null };
+          },
+        };
+
+        window.addEventListener('message', async (event) => {
+          const { id, cmd, args } = event.data ?? {};
+          if (typeof id !== 'number' || typeof cmd !== 'string' || !(cmd in commands)) return;
+          try {
+            const result = await commands[cmd](...(args ?? []));
+            event.source.postMessage({ id, role, ok: true, result }, { targetOrigin: location.origin });
+          } catch (error) {
+            event.source.postMessage(
+              { id, role, ok: false, error: error instanceof Error ? error.message : String(error) },
+              { targetOrigin: location.origin },
+            );
+          }
+        });
+
+        window.parent.postMessage({ ready: true, role }, { targetOrigin: location.origin });
+      } else {
+        const log = [];
+        const resultEl = document.getElementById('race-result');
+        const render = () => {
+          resultEl.textContent = log.join('\n');
+        };
+        const say = (line) => {
+          log.push(line);
+          render();
+        };
+
+        const frames = {};
+        const pendingRpcs = new Map();
+        let nextId = 1;
+
+        window.addEventListener('message', (event) => {
+          const data = event.data ?? {};
+          if (data.ready === true && typeof data.role === 'string') {
+            frames[data.role]?.resolve();
+            return;
+          }
+          if (typeof data.id === 'number' && pendingRpcs.has(data.id)) {
+            pendingRpcs.get(data.id)(data);
+            pendingRpcs.delete(data.id);
+          }
+        });
+
+        function spawn(role) {
+          let resolve;
+          const loaded = new Promise((done) => {
+            resolve = done;
+          });
+          frames[role] = { resolve };
+          const frame = document.createElement('iframe');
+          frame.src = `/handoff-race.html?mode=runner&role=${role}`;
+          frame.dataset.role = role;
+          document.body.appendChild(frame);
+          frames[role].window = frame.contentWindow;
+          return loaded;
+        }
+
+        function rpc(role, cmd, args = []) {
+          const target = frames[role].window;
+          return new Promise((resolve, reject) => {
+            const id = nextId++;
+            pendingRpcs.set(id, (reply) => {
+              if (reply.ok) resolve(reply.result);
+              else reject(new Error(`runner ${role} ${cmd}: ${reply.error}`));
+            });
+            target.postMessage({ id, cmd, args }, location.origin);
+            setTimeout(() => {
+              if (pendingRpcs.has(id)) {
+                pendingRpcs.delete(id);
+                reject(new Error(`runner ${role} ${cmd}: timed out`));
+              }
+            }, 30000);
+          });
+        }
+
+        function assert(condition, message) {
+          if (!condition) throw new Error(message);
+        }
+
+        async function run() {
+          const t0 = Date.now();
+          window.__raceDone = false;
+          say(`locks: ${typeof navigator?.locks?.request}`);
+          assert(typeof navigator?.locks?.request === 'function', 'needs real navigator.locks');
+          assert('indexedDB' in window, 'needs real IndexedDB');
+
+          await Promise.all([spawn('A'), spawn('B')]);
+          say('runners ready (two isolated realms, one origin store)');
+
+          // Phase 1: concurrent drain. Six takes land, both contexts hydrate
+          // them, then both drain at once — each take exactly once overall.
+          const names = ['race-0', 'race-1', 'race-2', 'race-3', 'race-4', 'race-5'];
+          await rpc('A', 'clean');
+          await rpc('A', 'send', [names]);
+          const [pendingA, pendingB] = await Promise.all([rpc('A', 'hydrate'), rpc('B', 'hydrate')]);
+          say(`phase1 hydrated pending A=${pendingA.pending} B=${pendingB.pending}`);
+          const [drainA, drainB] = await Promise.all([rpc('A', 'drain'), rpc('B', 'drain')]);
+          const delivered1 = [...drainA.got, ...drainB.got];
+          say(`phase1 delivered A=[${drainA.got}] B=[${drainB.got}] retries=${drainA.retries + drainB.retries}`);
+          assert(delivered1.length === names.length, `phase1 lost/duplicated: ${delivered1.length} vs ${names.length}`);
+          assert(
+            [...delivered1].sort().join() === [...names].sort().join(),
+            `phase1 set mismatch: ${[...delivered1].sort()}`,
+          );
+
+          // Phase 2: crash between delete and ack, then both contexts
+          // restart and hydrate the same intent concurrently. The replay must
+          // hold the per-take lock: one context queues it, the other nothing.
+          await rpc('A', 'clean');
+          await rpc('A', 'send', [['race-crash']]);
+          await Promise.all([rpc('A', 'hydrate'), rpc('B', 'hydrate')]);
+          const crash = await rpc('A', 'claimCrash');
+          assert(crash.status === 'taken', `phase2 setup claim not taken: ${crash.status}`);
+          const [reA, reB] = await Promise.all([rpc('A', 'hydrate'), rpc('B', 'hydrate')]);
+          say(`phase2 replay hydrated pending A=${reA.pending} B=${reB.pending}`);
+          assert(reA.pending + reB.pending === 1, `phase2 replay queued ${reA.pending + reB.pending}, want 1`);
+          const [oneA, oneB] = await Promise.all([rpc('A', 'takeOne'), rpc('B', 'takeOne')]);
+          const delivered2 = [oneA.name, oneB.name].filter((name) => name !== null);
+          say(`phase2 delivered A=${oneA.name} B=${oneB.name}`);
+          assert(delivered2.length === 1 && delivered2[0] === 'race-crash', `phase2 crash replay wrong: ${delivered2}`);
+
+          // Phase 3: acked everything replays nothing in either context.
+          await Promise.all([rpc('A', 'hydrate'), rpc('B', 'hydrate')]);
+          const [emptyA, emptyB] = await Promise.all([rpc('A', 'takeOne'), rpc('B', 'takeOne')]);
+          assert(emptyA.name === null && emptyB.name === null, 'phase3 replayed an acked take');
+          await rpc('A', 'clean');
+
+          const ms = Date.now() - t0;
+          say(`PASS two-context drain+crash exactly-once in ${ms}ms`);
+          resultEl.classList.add('pass');
+          document.title = 'PASS handoff race';
+          window.__raceDone = true;
+          window.__racePass = true;
+        }
+
+        run().catch((error) => {
+          say(`FAIL ${error instanceof Error ? error.message : String(error)}`);
+          resultEl.classList.add('fail');
+          document.title = 'FAIL handoff race';
+          window.__raceDone = true;
+          window.__racePass = false;
+        });
+      }
+    </script>
+  </body>
+</html>
